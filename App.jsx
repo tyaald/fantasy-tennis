@@ -194,6 +194,29 @@ const championsKey = () => `champions`; // one shared ledger across all events
 
 const safeParse = (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } };
 
+// Name normalizer — MUST match the one in functions/api/results.js so scraped keys line up.
+const norm = (s) => String(s || "")
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase().replace(/-/g, " ").replace(/[^a-z\s']/g, "").replace(/\s+/g, " ").trim();
+
+// Match a pick (usually a surname) to a scraped { normFullName: {name, wins} } map.
+// Returns the hit, or null if nothing matches or it's ambiguous (two different players).
+const matchScraped = (pickName, scrapedPlayers) => {
+  const p = norm(pickName);
+  if (!p) return null;
+  const pLast = p.split(" ").pop();
+  let hit = null, ambiguous = false;
+  for (const k in scrapedPlayers) {
+    const last = k.split(" ").pop();
+    const ok = k === p || last === pLast || k.endsWith(" " + p) || p.endsWith(" " + last);
+    if (ok) {
+      if (hit && norm(hit.name) !== norm(scrapedPlayers[k].name)) ambiguous = true;
+      hit = scrapedPlayers[k];
+    }
+  }
+  return ambiguous ? null : hit;
+};
+
 const scoreFor = (matchWins, cap, useCaps = true) => {
   const w = Number(matchWins) || 0;
   return (useCaps && cap != null) ? Math.min(w, cap) : w;
@@ -411,41 +434,12 @@ export default function TennisPool() {
     setFetchError(""); setFetchMsg(""); setProposed(null);
     if (!pickedAll.length) { if (!auto) setFetchError("No picks to score yet."); return; }
     setFetching(true);
-    const prompt =
-`Find the official COMPLETED singles results for the ${tour.name} ${year} tennis tournament — both the men's (ATP) and women's (WTA) singles draws.
 
-For each name in the list below, determine how many singles matches that player WON in that specific event (their raw "match wins"). The champion has the most (for example 7 at a Grand Slam, fewer at a smaller event); a first-round loser has 0. Names may be misspelled or last-name only — resolve them to the real player. If the event has not finished or you cannot determine a player's result, use null.
-
-Players: ${JSON.stringify(pickedAll)}
-
-Respond with ONLY a JSON object — no prose, no markdown fences. Keys must be EXACTLY the strings from the list above (preserve their original spelling). Values are the integer match-win count, or null if unknown.`;
-    try {
-      const res = await fetch("/api/anthropic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
-      if (!res.ok) throw new Error(`Request failed (${res.status})`);
-      const data = await res.json();
-      if (data?.type === "error") throw new Error(data.error?.message || "API error");
-      const text = (data.content || [])
-        .filter((b) => b.type === "text").map((b) => b.text).join("\n");
-      const s = text.indexOf("{"), e = text.lastIndexOf("}");
-      if (s === -1 || e === -1) throw new Error("No results found in the response.");
-      const obj = JSON.parse(text.slice(s, e + 1));
-      // keep only keys we asked about
-      const cleaned = {};
-      pickedAll.forEach((p) => { if (p in obj) cleaned[p] = obj[p]; });
-      if (!Object.keys(cleaned).length) throw new Error("Couldn't match any players.");
-
+    // Apply a { pickName: wins } map. Auto = silently apply new/higher counts, flag drops
+    // to confirm. Manual = show the full review.
+    const applyCleaned = async (cleaned) => {
+      if (!cleaned || !Object.keys(cleaned).length) throw new Error("No results found.");
       if (auto) {
-        // Match wins only rise during an event, so a new or higher count is a safe
-        // auto-update; only a value LOWER than one already recorded gets flagged to confirm.
         const next = { ...results };
         const conflicts = {};
         let applied = 0;
@@ -459,16 +453,63 @@ Respond with ONLY a JSON object — no prose, no markdown fences. Keys must be E
         });
         if (applied) { setResults(next); await store.set(resultsKey(ek), JSON.stringify(next)); }
         setProposed(Object.keys(conflicts).length ? conflicts : null);
-        if (applied) {
-          setFetchMsg(`Auto-updated ${applied} result${applied === 1 ? "" : "s"} from the web.`);
-          setTimeout(() => setFetchMsg(""), 4000);
-        }
+        if (applied) { setFetchMsg(`Auto-updated ${applied} result${applied === 1 ? "" : "s"}.`); setTimeout(() => setFetchMsg(""), 4000); }
       } else {
         setProposed(cleaned);
       }
+    };
+
+    // 1) Free path: scrape ESPN's JSON, match scraped winners to picks by surname.
+    const viaEspn = async () => {
+      const r = await fetch(`/api/results?name=${encodeURIComponent(tour.name)}`);
+      if (!r.ok) return null;
+      const d = await r.json();
+      if (!d || !d.players || !Object.keys(d.players).length) return null;
+      const cleaned = {};
+      pickedAll.forEach((p) => { const hit = matchScraped(p, d.players); if (hit) cleaned[p] = hit.wins; });
+      return Object.keys(cleaned).length ? cleaned : null;
+    };
+
+    // 2) Paid fallback: ask Claude, only if the scrape returned nothing usable.
+    const viaClaude = async () => {
+      const prompt =
+`Find the official COMPLETED singles results for the ${tour.name} ${year} tennis tournament — both the men's (ATP) and women's (WTA) singles draws.
+
+For each name in the list below, determine how many singles matches that player WON in that specific event (their raw "match wins"). The champion has the most (for example 7 at a Grand Slam, fewer at a smaller event); a first-round loser has 0. Names may be misspelled or last-name only — resolve them to the real player. If the event has not finished or you cannot determine a player's result, use null.
+
+Players: ${JSON.stringify(pickedAll)}
+
+Respond with ONLY a JSON object — no prose, no markdown fences. Keys must be EXACTLY the strings from the list above (preserve their original spelling). Values are the integer match-win count, or null if unknown.`;
+      const res = await fetch("/api/anthropic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          messages: [{ role: "user", content: prompt }],
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        }),
+      });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const data = await res.json();
+      if (data?.type === "error") throw new Error(data.error?.message || "API error");
+      const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      const s = text.indexOf("{"), e = text.lastIndexOf("}");
+      if (s === -1 || e === -1) throw new Error("No results found in the response.");
+      const obj = JSON.parse(text.slice(s, e + 1));
+      const cleaned = {};
+      pickedAll.forEach((p) => { if (p in obj) cleaned[p] = obj[p]; });
+      return Object.keys(cleaned).length ? cleaned : null;
+    };
+
+    try {
+      let cleaned = null;
+      try { cleaned = await viaEspn(); } catch { cleaned = null; }
+      if (!cleaned) cleaned = await viaClaude(); // paid fallback only when the free scrape misses
+      await applyCleaned(cleaned);
       await store.set(`fetchedAt:${ek}`, String(Date.now()));
     } catch (err) {
-      if (!auto) setFetchError(err.message || "Fetch failed. You can still enter results manually.");
+      if (!auto) setFetchError(err.message || "Couldn't fetch results. You can still enter them by hand.");
     } finally {
       setFetching(false);
     }
@@ -911,7 +952,7 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
       </main>
 
       <footer className="tp-foot">
-        {hasStore ? "Picks are saved and shared with everyone using this pool." : "Heads up: shared storage is unavailable here, so picks last only for this session."}
+        Picks and results are saved and shared with everyone using this pool.
       </footer>
     </div>
   );
