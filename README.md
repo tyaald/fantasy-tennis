@@ -102,6 +102,42 @@ reaches the browser.
 - **No accounts/auth:** like the original, the pool is open — anyone with the URL can add or edit
   picks. If you want it private, put Cloudflare Access in front of the Pages project.
 
+## Results: free ESPN scrape, Claude as backup
+
+Results now come from **ESPN's free, unofficial JSON** instead of a paid Claude call:
+
+- `functions/api/results.js` fetches the ATP + WTA tennis scoreboards from
+  `site.api.espn.com`, walks the JSON, and tallies how many singles matches each player has
+  **won** in the tournament (doubles and unfinished matches are ignored). It returns
+  `{ players: { "carlos alcaraz": { name, wins } }, seeds: {...} }`.
+- The app matches those winners to your picks by surname (`matchScraped` in `App.jsx`) and applies
+  them with the same "only goes up, confirm a drop" logic as before.
+- **Claude is only a fallback.** If the scrape returns nothing usable (endpoint changed, event not
+  found), `fetchResults` falls back to the `/api/anthropic` call. So in the normal case, results
+  cost **$0**; Claude is the safety net.
+
+The **seeded draw** (Load field from draw) still uses Claude, on purpose: ESPN's scoreboard only
+lists players once they have matches, so it can't give you the full pre-tournament seeded draw.
+That call is one-time per event and ~15¢, and Claude reads the official seeded draw reliably.
+
+### ⚠️ Verifying the scraper (do this once)
+
+ESPN's tennis feed is unofficial and its field names can differ from what this parser assumes — and
+I couldn't test it against a live response while building it. Before you rely on it:
+
+1. Open `https://site.api.espn.com/apis/site/v2/sports/tennis/atp/scoreboard` in a browser during a
+   live tournament and look at the JSON.
+2. Confirm the parser's assumptions in `functions/api/results.js`:
+   - `isCompleted()` — how ESPN marks a finished match (`status.type.completed` / `state: "post"`).
+   - `singleAthlete()` — where the player name lives (`competitor.athlete.displayName`) and where the
+     **seed** lives (`competitor.seed`).
+   - winner flag — `competitor.winner === true`.
+3. Tweak those three spots if the live shape differs. The traversal (`collectMatches`) is generic, so
+   usually only field names need adjusting.
+
+If you'd rather not maintain a scraper at all, delete `functions/api/results.js` and the `viaEspn`
+block in `fetchResults` — the app falls back to the Claude path automatically.
+
 ## Project layout
 
 ```
@@ -115,5 +151,6 @@ tennis-pool/
 └─ functions/
    └─ api/
       ├─ kv.js          # shared storage
-      └─ anthropic.js   # AI proxy
+      ├─ results.js     # ESPN results scraper (free)
+      └─ anthropic.js   # AI proxy (draw seeds + results fallback)
 ```
