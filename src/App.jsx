@@ -732,7 +732,7 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
 
       {/* ---------- TABS ---------- */}
       <nav className="tabs">
-        {[["picks","Make picks"],["board","Standings"],["records","Record Books"]].map(([id,lbl]) => (
+        {[["picks","Make picks"],["board","Standings"],["records","Record Books"],["invite","Join & Notify"]].map(([id,lbl]) => (
           <button key={id} className={"tab" + (tab === id ? " active" : "")} onClick={() => setTab(id)}>{lbl}</button>
         ))}
       </nav>
@@ -949,6 +949,9 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
             </div>
           </section>
         )}
+
+        {/* ============ JOIN & NOTIFY (mailing list + draw-release email) ============ */}
+        {tab === "invite" && <InviteTab tourName={tour.name} year={year} accent={accent} />}
       </main>
 
       <footer className="tp-foot">
@@ -1078,6 +1081,207 @@ function Sheet({ rows, view, results, capsApply }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  JOIN & NOTIFY  (mailing list sign-up + draw-release email sender)  */
+/* ------------------------------------------------------------------ */
+
+const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/14xiJ44UgZ0HDhKwqKY5QnFAgcJJSbsuCj6tP9s11To8/edit?usp=sharing";
+const DEFAULT_RULE_NOTE = "Please note that the Rules Committee has made a rule change, where points scored by the runner-up and semi-finalists are capped by the final position chosen by the contestants. (Runner-ups can only score a max of 6 points, and semi-finalists can only score a max of 5 points.)";
+const DEFAULT_BUYIN = "$10 for students and $20 for those who are not";
+
+function buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, sheetUrl, buyin, ruleNote, sender }) {
+  const mensLink = mensUrl ? `<a href="${mensUrl}">Men's</a>` : "Men's";
+  const womensLink = womensUrl ? `<a href="${womensUrl}">Women's</a>` : "Women's";
+  const sheetLink = sheetUrl ? `<a href="${sheetUrl}">Google spreadsheet</a>` : "Google spreadsheet";
+
+  let body = `Tennis aficionados:<br><br>`;
+  body += `It's time for ${tournament || "[tournament]"}, which means it's time to make your bets<br><br>`;
+  body += `Please enter your picks for the ${mensLink} and ${womensLink} brackets into the ${sheetLink} by ${deadline || "[deadline]"}.<br><br>`;
+  if (ruleNote) body += `${ruleNote}<br><br>`;
+  body += `The buy-in remains the same, with ${buyin || "[buy-in]"}. Buy-in goes as a donation to <a href="https://visionaries-international.org/donate/">Visionaries International.</a><br><br>`;
+  body += `You are welcome to share this with others (which means if you win you get more money 😉). `;
+  body += `Note that "Top 10, 20, 30" refers to the seeding in the tournament, not the ATP or WTA ranking. `;
+  body += `Please be sure to fill in only the player's last name correctly (if there are multiple players with the same last name, fill in the name with the first letter of the first name). Also please ignore the many N/As, those are there to make the updating of player scores faster.<br><br>`;
+  body += `Good luck, have fun!<br>${sender || ""}`;
+  return body;
+}
+
+function InviteTab({ tourName, year, accent }) {
+  // public join form
+  const [subName, setSubName] = useState("");
+  const [subEmail, setSubEmail] = useState("");
+  const [company, setCompany] = useState(""); // honeypot
+  const [subMsg, setSubMsg] = useState("");
+  const [subBusy, setSubBusy] = useState(false);
+
+  // admin composer
+  const [password, setPassword] = useState("");
+  const [tournament, setTournament] = useState(`${tourName} ${year}`);
+  const [deadline, setDeadline] = useState("10:59 AM PST tomorrow");
+  const [mensUrl, setMensUrl] = useState("");
+  const [womensUrl, setWomensUrl] = useState("");
+  const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
+  const [buyin, setBuyin] = useState(DEFAULT_BUYIN);
+  const [ruleNote, setRuleNote] = useState(DEFAULT_RULE_NOTE);
+  const [sender, setSender] = useState("Ty");
+  const [sendMsg, setSendMsg] = useState("");
+  const [sending, setSending] = useState(false);
+
+  // subscriber management
+  const [subscribers, setSubscribers] = useState(null); // null = not loaded yet
+  const [listMsg, setListMsg] = useState("");
+
+  const joinList = async (e) => {
+    e.preventDefault();
+    if (!subName.trim() || !subEmail.trim()) { setSubMsg("Name and email are both required."); return; }
+    setSubBusy(true); setSubMsg("Joining…");
+    try {
+      const res = await fetch("/api/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: subName.trim(), email: subEmail.trim(), company }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't join.");
+      setSubMsg("You're on the list!");
+      setSubName(""); setSubEmail("");
+    } catch (err) {
+      setSubMsg(err.message);
+    } finally {
+      setSubBusy(false);
+    }
+  };
+
+  const emailHtml = buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, sheetUrl, buyin, ruleNote, sender });
+
+  const sendEmail = async () => {
+    if (!password) { setSendMsg("Enter the send password first."); return; }
+    setSending(true); setSendMsg("Sending…");
+    try {
+      const res = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password, tournament, html: emailHtml }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Send failed.");
+      setSendMsg(`Sent to ${data.count} subscriber(s).`);
+    } catch (err) {
+      setSendMsg(err.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const loadSubscribers = async () => {
+    if (!password) { setListMsg("Enter the send password first."); return; }
+    setListMsg("Loading…");
+    try {
+      const res = await fetch("/api/subscribers", { headers: { "x-admin-password": password } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't load list.");
+      setSubscribers(data.subscribers);
+      setListMsg(`${data.subscribers.length} on the list.`);
+    } catch (err) {
+      setListMsg(err.message);
+    }
+  };
+
+  const removeSubscriber = async (email) => {
+    try {
+      const res = await fetch(`/api/subscribers?email=${encodeURIComponent(email)}`, {
+        method: "DELETE",
+        headers: { "x-admin-password": password },
+      });
+      if (!res.ok) throw new Error("Remove failed.");
+      loadSubscribers();
+    } catch (err) {
+      setListMsg(err.message);
+    }
+  };
+
+  return (
+    <section>
+      <h2 className="sec-title">Join &amp; Notify</h2>
+      <p className="muted">Anyone can join the mailing list below. The organizer's panel on the right sends the draw-release email to everyone on it.</p>
+
+      <div className="invite-grid">
+        {/* ---------- public join form ---------- */}
+        <div className="board">
+          <div className="board-head"><span className="dot" />Join the list</div>
+          <form onSubmit={joinList}>
+            <div className="pick-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+              <input className="name-input" placeholder="Your name" value={subName} onChange={(e) => setSubName(e.target.value)} />
+              <input className="name-input" type="email" placeholder="you@email.com" value={subEmail} onChange={(e) => setSubEmail(e.target.value)} />
+              <input
+                type="text" value={company} onChange={(e) => setCompany(e.target.value)}
+                tabIndex={-1} autoComplete="off" aria-hidden="true"
+                style={{ position: "absolute", left: "-9999px", width: 1, height: 1 }}
+              />
+              <button type="submit" className="primary" disabled={subBusy} style={{ alignSelf: "flex-start" }}>
+                {subBusy ? "Joining…" : "Join the list"}
+              </button>
+              {subMsg && <span className="save-msg">{subMsg}</span>}
+            </div>
+          </form>
+        </div>
+
+        {/* ---------- organizer admin panel ---------- */}
+        <div className="board">
+          <div className="board-head"><span className="dot" />Send the draw email</div>
+
+          <div className="pick-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+            <input className="name-input" type="password" placeholder="Send password" value={password} onChange={(e) => setPassword(e.target.value)} />
+
+            <input className="name-input" placeholder="Tournament" value={tournament} onChange={(e) => setTournament(e.target.value)} />
+            <input className="name-input" placeholder="Deadline (e.g. 10:59 AM PST tomorrow)" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+            <input className="name-input" placeholder="Men's draw link" value={mensUrl} onChange={(e) => setMensUrl(e.target.value)} />
+            <input className="name-input" placeholder="Women's draw link" value={womensUrl} onChange={(e) => setWomensUrl(e.target.value)} />
+            <input className="name-input" placeholder="Google Sheet link" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} />
+            <input className="name-input" placeholder="Buy-in line" value={buyin} onChange={(e) => setBuyin(e.target.value)} />
+            <textarea
+              className="name-input" rows={3} placeholder="Rule note (leave blank to omit)"
+              value={ruleNote} onChange={(e) => setRuleNote(e.target.value)}
+              style={{ resize: "vertical", fontFamily: "inherit" }}
+            />
+            <input className="name-input" placeholder="Sign-off name" value={sender} onChange={(e) => setSender(e.target.value)} />
+
+            <div className="save-bar">
+              <button className="primary" onClick={sendEmail} disabled={sending}>
+                {sending ? "Sending…" : "Send to mailing list"}
+              </button>
+              {sendMsg && <span className="save-msg">{sendMsg}</span>}
+            </div>
+
+            <div className="save-bar">
+              <button className="ghost" type="button" onClick={loadSubscribers}>Show sign-up list</button>
+              {listMsg && <span className="save-msg">{listMsg}</span>}
+            </div>
+
+            {subscribers && (
+              <div style={{ marginTop: 6 }}>
+                {!subscribers.length && <div className="empty">No sign-ups yet.</div>}
+                {subscribers.map((s) => (
+                  <div key={s.email} className="pick-row">
+                    <span style={{ flex: 1 }}>{s.name} — {s.email}</span>
+                    <button type="button" className="ghost" onClick={() => removeSubscriber(s.email)}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ---------- live preview ---------- */}
+      <div className="board" style={{ marginTop: 16 }}>
+        <div className="board-head"><span className="dot" />Preview</div>
+        <div className="email-preview" style={{ borderColor: accent }} dangerouslySetInnerHTML={{ __html: emailHtml }} />
+      </div>
+    </section>
   );
 }
 
@@ -1363,4 +1567,11 @@ const CSS = `
 .cc-side{font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:12px; color:var(--muted);
   width:16px; height:16px; display:grid; place-items:center; border:1px solid var(--line); border-radius:4px; flex:none}
 .cc-name{font-weight:600}
+
+/* join & notify */
+.invite-grid{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px}
+@media(max-width:720px){.invite-grid{grid-template-columns:1fr}}
+.email-preview{background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--accent);
+  border-radius:10px; padding:16px 18px; font-size:14px; line-height:1.6; color:var(--text)}
+.email-preview a{color:var(--glow)}
 `;

@@ -1,13 +1,16 @@
 # Tennis Pool — Cloudflare Pages
 
-A fantasy tennis pool. React (Vite) front end, with two Cloudflare Pages Functions:
+A fantasy tennis pool. React (Vite) front end, with Cloudflare Pages Functions:
 
 - `functions/api/kv.js` — shared storage for everyone's picks/results, backed by a **KV namespace**.
 - `functions/api/anthropic.js` — a **key-protected proxy** to the Anthropic API, used by the
   "Auto-fetch results" and "Load field from draw" features.
+- `functions/api/subscribe.js`, `subscribers.js`, `send-email.js` — the **Join & Notify** tab: a
+  public mailing-list sign-up, plus a password-gated composer that emails everyone when a new
+  draw is out.
 
 The original app ran inside Claude and used Claude's built-in storage and API access. Those have
-been swapped for the two functions above so it can run as a normal website.
+been swapped for the functions above so it can run as a normal website.
 
 ---
 
@@ -85,6 +88,7 @@ Every push to the connected branch now redeploys automatically.
 |----------------------|--------------------------------------|-----------------------|
 | Shared pool storage  | `functions/api/kv.js` + KV namespace | `POOL_KV` (KV)        |
 | Results / draw fetch | `functions/api/anthropic.js`         | `ANTHROPIC_API_KEY`   |
+| Draw-release emails  | `functions/api/send-email.js`        | `RESEND_API_KEY`, `FROM_EMAIL`, `SEND_PASSWORD` |
 
 The front end calls `/api/kv` and `/api/anthropic` — same-origin, so no CORS and the key never
 reaches the browser.
@@ -138,6 +142,32 @@ I couldn't test it against a live response while building it. Before you rely on
 If you'd rather not maintain a scraper at all, delete `functions/api/results.js` and the `viaEspn`
 block in `fetchResults` — the app falls back to the Claude path automatically.
 
+## Join & Notify: mailing list + draw-release email
+
+The **Join & Notify** tab has two halves:
+
+- **Public sign-up** — anyone visiting the site can enter their name and email to join the
+  mailing list. Stored in the same `POOL_KV` namespace (key prefix `subscriber:`), so no extra
+  storage to set up.
+- **Organizer panel** — enter a send password, fill in the details that change each tournament
+  (deadline, draw links, etc.), watch the live preview, and click **Send to mailing list**. It
+  emails everyone in the format you already use, via [Resend](https://resend.com).
+
+To turn this on, set three more secrets (same method as `ANTHROPIC_API_KEY` above):
+
+```bash
+npx wrangler pages secret put RESEND_API_KEY   # free at resend.com, verify a sending domain
+npx wrangler pages secret put FROM_EMAIL        # e.g. "Tennis Pool <pool@yourdomain.com>"
+npx wrangler pages secret put SEND_PASSWORD     # any password — typed into the admin panel to send
+```
+
+Or in the dashboard: **Settings → Environment variables → Add**, mark each as a **Secret**, then
+redeploy. Without these three set, sign-ups still work (they just sit in KV); sending returns a
+clear error telling you which one is missing.
+
+There's no reliable way to auto-detect when a tournament actually releases its draw (no schedule
+or feed for that), so sending stays a one-click action you fire whenever the draw is out.
+
 ## Project layout
 
 ```
@@ -150,7 +180,10 @@ tennis-pool/
 │  └─ App.jsx           # the whole pool (your component)
 └─ functions/
    └─ api/
-      ├─ kv.js          # shared storage
-      ├─ results.js     # ESPN results scraper (free)
-      └─ anthropic.js   # AI proxy (draw seeds + results fallback)
+      ├─ kv.js           # shared storage
+      ├─ results.js      # ESPN results scraper (free)
+      ├─ anthropic.js    # AI proxy (draw seeds + results fallback)
+      ├─ subscribe.js    # public mailing-list sign-up
+      ├─ subscribers.js  # admin: list/remove subscribers (password-protected)
+      └─ send-email.js   # admin: send the draw-release email (password-protected)
 ```
