@@ -951,7 +951,7 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
         )}
 
         {/* ============ JOIN & NOTIFY (mailing list + draw-release email) ============ */}
-        {tab === "invite" && <InviteTab tourName={tour.name} year={year} accent={accent} />}
+        {tab === "invite" && <InviteTab tid={tid} tourName={tour.name} year={year} accent={accent} />}
       </main>
 
       <footer className="tp-foot">
@@ -1092,6 +1092,17 @@ const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/14xiJ44UgZ0HDh
 const DEFAULT_RULE_NOTE = "Please note that the Rules Committee has made a rule change, where points scored by the runner-up and semi-finalists are capped by the final position chosen by the contestants. (Runner-ups can only score a max of 6 points, and semi-finalists can only score a max of 5 points.)";
 const DEFAULT_BUYIN = "$10 for students and $20 for those who are not";
 
+// Best-effort official draw-page links per tournament. URL patterns are pretty stable
+// year to year, but sites occasionally restructure — double-check before sending,
+// especially early in a season.
+const DRAW_LINKS = {
+  ao:  { men: "https://ausopen.com/draws",                                   women: "https://ausopen.com/draws" },
+  iw:  { men: "https://bnpparibasopen.com/scores/draws",                     women: "https://bnpparibasopen.com/scores/draws?selected=womensSingles" },
+  rg:  { men: "https://www.rolandgarros.com/en-us/draws",                    women: "https://www.rolandgarros.com/en-us/draws" },
+  wim: { men: "https://www.wimbledon.com/en_GB/draws/gentlemens-singles",    women: "https://www.wimbledon.com/en_GB/draws/ladies-singles" },
+  uso: { men: "https://www.usopen.org/en_US/draws/mens-singles.html",        women: "https://www.usopen.org/en_US/draws/womens-singles.html" },
+};
+
 function buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, sheetUrl, buyin, ruleNote, sender }) {
   const mensLink = mensUrl ? `<a href="${mensUrl}">Men's</a>` : "Men's";
   const womensLink = womensUrl ? `<a href="${womensUrl}">Women's</a>` : "Women's";
@@ -1109,7 +1120,7 @@ function buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, sheetUrl
   return body;
 }
 
-function InviteTab({ tourName, year, accent }) {
+function InviteTab({ tid, tourName, year, accent }) {
   // public join form
   const [subName, setSubName] = useState("");
   const [subEmail, setSubEmail] = useState("");
@@ -1121,14 +1132,21 @@ function InviteTab({ tourName, year, accent }) {
   const [password, setPassword] = useState("");
   const [tournament, setTournament] = useState(`${tourName} ${year}`);
   const [deadline, setDeadline] = useState("10:59 AM PST tomorrow");
-  const [mensUrl, setMensUrl] = useState("");
-  const [womensUrl, setWomensUrl] = useState("");
+  const [mensUrl, setMensUrl] = useState(DRAW_LINKS[tid]?.men || "");
+  const [womensUrl, setWomensUrl] = useState(DRAW_LINKS[tid]?.women || "");
   const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
   const [buyin, setBuyin] = useState(DEFAULT_BUYIN);
   const [ruleNote, setRuleNote] = useState(DEFAULT_RULE_NOTE);
   const [sender, setSender] = useState("Ty");
   const [sendMsg, setSendMsg] = useState("");
   const [sending, setSending] = useState(false);
+
+  const autofillLinks = () => {
+    const links = DRAW_LINKS[tid];
+    setTournament(`${tourName} ${year}`);
+    if (links) { setMensUrl(links.men); setWomensUrl(links.women); }
+    else setSendMsg("No known draw link for this event yet — paste it in manually.");
+  };
 
   // subscriber management
   const [subscribers, setSubscribers] = useState(null); // null = not loaded yet
@@ -1238,6 +1256,13 @@ function InviteTab({ tourName, year, accent }) {
 
             <input className="name-input" placeholder="Tournament" value={tournament} onChange={(e) => setTournament(e.target.value)} />
             <input className="name-input" placeholder="Deadline (e.g. 10:59 AM PST tomorrow)" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="muted small">Draw links</span>
+              <button type="button" className="ghost" onClick={autofillLinks} style={{ padding: "4px 10px", fontSize: 12 }}>
+                ↺ Use official {tourName} pages
+              </button>
+            </div>
             <input className="name-input" placeholder="Men's draw link" value={mensUrl} onChange={(e) => setMensUrl(e.target.value)} />
             <input className="name-input" placeholder="Women's draw link" value={womensUrl} onChange={(e) => setWomensUrl(e.target.value)} />
             <input className="name-input" placeholder="Google Sheet link" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} />

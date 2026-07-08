@@ -18,3 +18,10 @@ id = "PUT_YOUR_KV_NAMESPACE_ID_HERE"
 # ANTHROPIC_API_KEY is a SECRET — do not put it here. Set it with:
 #   npx wrangler pages secret put ANTHROPIC_API_KEY
 # or in the dashboard (Settings -> Environment variables -> add as a secret).
+
+# The "Join & Notify" tab (mailing list + draw-release email) needs three more
+# SECRETS, same method as above:
+#   npx wrangler pages secret put RESEND_API_KEY   # from resend.com
+#   npx wrangler pages secret put FROM_EMAIL        # e.g. "Tennis Pool <pool@yourdomain.com>"
+#   npx wrangler pages secret put SEND_PASSWORD     # any password you choose
+
