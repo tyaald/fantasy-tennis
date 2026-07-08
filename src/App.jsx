@@ -1088,7 +1088,6 @@ function Sheet({ rows, view, results, capsApply }) {
 /*  JOIN & NOTIFY  (mailing list sign-up + draw-release email sender)  */
 /* ------------------------------------------------------------------ */
 
-const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/14xiJ44UgZ0HDhKwqKY5QnFAgcJJSbsuCj6tP9s11To8/edit?usp=sharing";
 const DEFAULT_RULE_NOTE = "Please note that the Rules Committee has made a rule change, where points scored by the runner-up and semi-finalists are capped by the final position chosen by the contestants. (Runner-ups can only score a max of 6 points, and semi-finalists can only score a max of 5 points.)";
 const DEFAULT_BUYIN = "$10 for students and $20 for those who are not";
 
@@ -1103,14 +1102,14 @@ const DRAW_LINKS = {
   uso: { men: "https://www.usopen.org/en_US/draws/mens-singles.html",        women: "https://www.usopen.org/en_US/draws/womens-singles.html" },
 };
 
-function buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, sheetUrl, buyin, ruleNote, sender }) {
+function buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, siteUrl, buyin, ruleNote, sender }) {
   const mensLink = mensUrl ? `<a href="${mensUrl}">Men's</a>` : "Men's";
   const womensLink = womensUrl ? `<a href="${womensUrl}">Women's</a>` : "Women's";
-  const sheetLink = sheetUrl ? `<a href="${sheetUrl}">Google spreadsheet</a>` : "Google spreadsheet";
+  const siteLink = siteUrl ? `<a href="${siteUrl}">pool site</a>` : "pool site";
 
   let body = `Tennis aficionados:<br><br>`;
   body += `It's time for ${tournament || "[tournament]"}, which means it's time to make your bets<br><br>`;
-  body += `Please enter your picks for the ${mensLink} and ${womensLink} brackets into the ${sheetLink} by ${deadline || "[deadline]"}.<br><br>`;
+  body += `Please enter your picks for the ${mensLink} and ${womensLink} brackets on the ${siteLink} by ${deadline || "[deadline]"}.<br><br>`;
   if (ruleNote) body += `${ruleNote}<br><br>`;
   body += `The buy-in remains the same, with ${buyin || "[buy-in]"}. Buy-in goes as a donation to <a href="https://visionaries-international.org/donate/">Visionaries International.</a><br><br>`;
   body += `You are welcome to share this with others (which means if you win you get more money 😉). `;
@@ -1134,7 +1133,7 @@ function InviteTab({ tid, tourName, year, accent }) {
   const [deadline, setDeadline] = useState("10:59 AM PST tomorrow");
   const [mensUrl, setMensUrl] = useState(DRAW_LINKS[tid]?.men || "");
   const [womensUrl, setWomensUrl] = useState(DRAW_LINKS[tid]?.women || "");
-  const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
+  const [siteUrl, setSiteUrl] = useState(typeof window !== "undefined" ? window.location.origin : "");
   const [buyin, setBuyin] = useState(DEFAULT_BUYIN);
   const [ruleNote, setRuleNote] = useState(DEFAULT_RULE_NOTE);
   const [sender, setSender] = useState("Ty");
@@ -1173,7 +1172,7 @@ function InviteTab({ tid, tourName, year, accent }) {
     }
   };
 
-  const emailHtml = buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, sheetUrl, buyin, ruleNote, sender });
+  const emailHtml = buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, siteUrl, buyin, ruleNote, sender });
 
   const sendEmail = async () => {
     if (!password) { setSendMsg("Enter the send password first."); return; }
@@ -1265,7 +1264,7 @@ function InviteTab({ tid, tourName, year, accent }) {
             </div>
             <input className="name-input" placeholder="Men's draw link" value={mensUrl} onChange={(e) => setMensUrl(e.target.value)} />
             <input className="name-input" placeholder="Women's draw link" value={womensUrl} onChange={(e) => setWomensUrl(e.target.value)} />
-            <input className="name-input" placeholder="Google Sheet link" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} />
+            <input className="name-input" placeholder="Pool site link" value={siteUrl} onChange={(e) => setSiteUrl(e.target.value)} />
             <input className="name-input" placeholder="Buy-in line" value={buyin} onChange={(e) => setBuyin(e.target.value)} />
             <textarea
               className="name-input" rows={3} placeholder="Rule note (leave blank to omit)"
