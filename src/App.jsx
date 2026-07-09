@@ -732,7 +732,7 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
 
       {/* ---------- TABS ---------- */}
       <nav className="tabs">
-        {[["picks","Make picks"],["board","Standings"],["records","Record Books"],["invite","Join & Notify"]].map(([id,lbl]) => (
+        {[["picks","Make picks"],["board","Standings"],["records","Record Books"],["rules","Rules"],["invite","Join & Notify"]].map(([id,lbl]) => (
           <button key={id} className={"tab" + (tab === id ? " active" : "")} onClick={() => setTab(id)}>{lbl}</button>
         ))}
       </nav>
@@ -950,6 +950,9 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
           </section>
         )}
 
+        {/* ============ RULES ============ */}
+        {tab === "rules" && <RulesTab capsApply={capsApply} />}
+
         {/* ============ JOIN & NOTIFY (mailing list + draw-release email) ============ */}
         {tab === "invite" && <InviteTab tid={tid} tourName={tour.name} year={year} accent={accent} />}
       </main>
@@ -1081,6 +1084,93 @@ function Sheet({ rows, view, results, capsApply }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  RULES                                                              */
+/* ------------------------------------------------------------------ */
+
+function RulesTab({ capsApply }) {
+  return (
+    <section>
+      <h2 className="sec-title">Rules &amp; Scoring</h2>
+
+      <div className="board">
+        <div className="board-head"><span className="dot" />How it works</div>
+        <p className="muted" style={{ padding: "0 2px 4px" }}>
+          For each tournament, everyone fills out both a Men's and a Women's bracket by picking one
+          player for each of the seven slots below. Your score for a bracket is the sum of points
+          across all seven picks; your total for the event is Men's + Women's combined.
+        </p>
+      </div>
+
+      <div className="board" style={{ marginTop: 14 }}>
+        <div className="board-head"><span className="dot" />Scoring by slot</div>
+        <div className="sheet-wrap">
+        <table className="sheet">
+          <thead>
+            <tr>
+              <th>Slot</th>
+              <th>Requirement</th>
+              <th>Points</th>
+            </tr>
+          </thead>
+          <tbody>
+            {CATEGORIES.map((c) => (
+              <tr key={c.key}>
+                <td className="cc-name">{c.label}</td>
+                <td>{c.outsideTop ? `Seeded outside the top ${c.outsideTop} (or unseeded)` : "Any player"}</td>
+                <td>
+                  {c.cap != null
+                    ? `Match wins, capped at ${c.cap}`
+                    : "Match wins, uncapped (up to 7)"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>
+      </div>
+
+      <div className="board" style={{ marginTop: 14 }}>
+        <div className="board-head"><span className="dot" />The cap rule, explained</div>
+        <p className="muted" style={{ padding: "0 2px 4px" }}>
+          Points come from how many matches your picked player actually wins in the draw — but for
+          the Runner-Up and Semi-Finalist slots, that's capped at what the slot itself is worth
+          (6 and 5), even if the player goes on to do better than you predicted. Pick someone as
+          your Runner-Up and they win the whole title? You still score 6 for that slot, not 7 — the
+          cap reflects the position <em>you</em> chose them for. Winner, Dark Horse, Long Shot, and
+          Dreamer picks are uncapped: you get full credit for however far they actually go.
+        </p>
+        {!capsApply && (
+          <p className="muted" style={{ padding: "0 2px 4px" }}>
+            Heads up: caps aren't applied retroactively — a few earlier events on this site predate
+            the cap rule and are scored uncapped throughout, to keep old standings consistent with
+            how they were originally recorded.
+          </p>
+        )}
+      </div>
+
+      <div className="board" style={{ marginTop: 14 }}>
+        <div className="board-head"><span className="dot" />Buy-in</div>
+        <p className="muted" style={{ padding: "0 2px 4px" }}>
+          {DEFAULT_BUYIN}. Buy-in goes as a donation to{" "}
+          <a href="https://visionaries-international.org/donate/" style={{ color: "var(--glow)" }}>
+            Visionaries International
+          </a>.
+        </p>
+      </div>
+
+      <div className="board" style={{ marginTop: 14 }}>
+        <div className="board-head"><span className="dot" />Good to know</div>
+        <ul className="muted" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+          <li>"Top 10 / 20 / 30" refers to the tournament's own seeding, not ATP/WTA world ranking.</li>
+          <li>Feel free to share the pool with others — more entries, bigger pot.</li>
+          <li>Enter picks by each event's deadline — see the announcement email or the organizer for the exact cutoff.</li>
+        </ul>
+      </div>
+    </section>
   );
 }
 
