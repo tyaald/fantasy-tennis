@@ -1,0 +1,19 @@
+name = "tennis-pool-winners-cron"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# Runs every 3 hours. Tighten this during an active tournament's final rounds if
+# you want the email to land sooner after the last match; loosen it the rest of
+# the year since there's nothing to find outside tournament windows anyway.
+[triggers]
+crons = ["0 */3 * * *"]
+
+# Set your deployed Pages URL here (no trailing slash), e.g.:
+# [vars]
+# SITE_URL = "https://tennis-pool.pages.dev"
+[vars]
+SITE_URL = "REPLACE_WITH_YOUR_PAGES_URL"
+
+# CRON_SECRET is a SECRET — do not put it here. Set it with:
+#   npx wrangler secret put CRON_SECRET
+# Use the exact same value as the CRON_SECRET secret on the main Pages project.

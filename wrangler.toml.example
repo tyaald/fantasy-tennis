@@ -24,4 +24,7 @@ id = "PUT_YOUR_KV_NAMESPACE_ID_HERE"
 #   npx wrangler pages secret put RESEND_API_KEY   # from resend.com
 #   npx wrangler pages secret put FROM_EMAIL        # e.g. "Tennis Pool <pool@yourdomain.com>"
 #   npx wrangler pages secret put SEND_PASSWORD     # any password you choose
+#
+# The automatic winners email (see README) needs one more:
+#   npx wrangler pages secret put CRON_SECRET       # any random string, matches cron-worker's copy
 

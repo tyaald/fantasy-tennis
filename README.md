@@ -89,6 +89,7 @@ Every push to the connected branch now redeploys automatically.
 | Shared pool storage  | `functions/api/kv.js` + KV namespace | `POOL_KV` (KV)        |
 | Results / draw fetch | `functions/api/anthropic.js`         | `ANTHROPIC_API_KEY`   |
 | Draw-release emails  | `functions/api/send-email.js`        | `RESEND_API_KEY`, `FROM_EMAIL`, `SEND_PASSWORD` |
+| Automatic winners email | `functions/api/winners-check.js` + `cron-worker/` | `CRON_SECRET` (+ the three above) |
 
 The front end calls `/api/kv` and `/api/anthropic` — same-origin, so no CORS and the key never
 reaches the browser.
@@ -165,8 +166,68 @@ Or in the dashboard: **Settings → Environment variables → Add**, mark each a
 redeploy. Without these three set, sign-ups still work (they just sit in KV); sending returns a
 clear error telling you which one is missing.
 
+**Everyone's address is visible, on purpose.** Both the draw email and the winners email put all
+subscribers (plus you) in the `to` field — not `bcc` — so people can reply-all and chat with each
+other about picks. That also means each subscriber can see everyone else's email address; if you'd
+rather keep addresses private and lose reply-all, switch `to: [...]` back to `to: env.FROM_EMAIL` /
+`bcc: emails` in `functions/api/send-email.js` and `functions/api/winners-check.js`.
+
 There's no reliable way to auto-detect when a tournament actually releases its draw (no schedule
 or feed for that), so sending stays a one-click action you fire whenever the draw is out.
+
+## Winners email: fully automatic, no button
+
+When both a men's and women's champion have been decided, everyone on the mailing list gets a
+short "champions crowned" email automatically — no one has to open the site or click anything.
+
+**How it detects "the tournament is over":** `functions/api/winners-check.js` looks at every
+tournament the pool has actually used this year (i.e. has a saved roster from "Load field from
+draw"), pulls live results from the same ESPN scraper the site already uses
+(`functions/api/results.js`), and checks whether a player from the men's roster and a player from
+the women's roster has each reached 7 match wins — the number needed to win a 128-player draw.
+The moment both are found, it emails the list once and remembers it did (so it won't send twice).
+
+**Why there's a second, separate Worker (`/cron-worker`):** Cloudflare Pages Functions can't run
+on a schedule — only standalone Workers can. So `cron-worker/worker.js` is a tiny, separate Worker
+whose only job is to wake up periodically and ping `/api/winners-check` on your Pages site. It
+holds no logic and no KV of its own.
+
+**Setup:**
+
+1. On the **Pages project**, add one more secret (alongside `RESEND_API_KEY`, `FROM_EMAIL`,
+   `SEND_PASSWORD` from above):
+   ```bash
+   npx wrangler pages secret put CRON_SECRET
+   ```
+   (any random string — this stops strangers from pinging the endpoint and forcing a send.)
+
+2. Deploy the cron worker as its own project:
+   ```bash
+   cd cron-worker
+   npx wrangler login              # if you haven't already
+   ```
+   Edit `wrangler.toml` and replace `SITE_URL` with your actual Pages URL, then:
+   ```bash
+   npx wrangler deploy
+   npx wrangler secret put CRON_SECRET   # same value as step 1, exactly
+   ```
+   By default it checks every 3 hours (`0 */3 * * *` in `wrangler.toml`) — adjust if you want
+   faster turnaround during a tournament's final weekend.
+
+**Honesty about the moving parts this depends on:**
+
+- It relies on the **same unverified ESPN scraper** the rest of the app uses — see "Verifying the
+  scraper" above. If ESPN changes its feed shape, this silently finds nothing rather than sending
+  something wrong, but it also won't fire until you fix the parser.
+- It only checks events with a saved **roster** for the current calendar year — if you never open
+  "Make picks" for an event (which auto-loads the roster), this won't know that event exists.
+  Visiting the Make picks tab once per tournament is enough; no other setup needed per event.
+- Champion detection is "someone from the men's/women's roster reached 7 wins," matched by surname
+  the same way the site matches your picks to results. Byes, retirements, or a walkover recorded
+  oddly by ESPN could in theory throw this off — it's the same matching logic already trusted
+  elsewhere in the app, not new risk, but still worth knowing about.
+- This does **not** touch the Record Books — crowning champions there is still the separate manual
+  "Record to Record Books" button. This only sends the email.
 
 ## Project layout
 
@@ -178,12 +239,16 @@ tennis-pool/
 ├─ src/
 │  ├─ main.jsx          # mounts the app
 │  └─ App.jsx           # the whole pool (your component)
-└─ functions/
-   └─ api/
-      ├─ kv.js           # shared storage
-      ├─ results.js      # ESPN results scraper (free)
-      ├─ anthropic.js    # AI proxy (draw seeds + results fallback)
-      ├─ subscribe.js    # public mailing-list sign-up
-      ├─ subscribers.js  # admin: list/remove subscribers (password-protected)
-      └─ send-email.js   # admin: send the draw-release email (password-protected)
+├─ functions/
+│  └─ api/
+│     ├─ kv.js              # shared storage
+│     ├─ results.js         # ESPN results scraper (free)
+│     ├─ anthropic.js       # AI proxy (draw seeds + results fallback)
+│     ├─ subscribe.js       # public mailing-list sign-up
+│     ├─ subscribers.js     # admin: list/remove subscribers (password-protected)
+│     ├─ send-email.js      # admin: send the draw-release email (password-protected)
+│     └─ winners-check.js   # auto-detect champions + email the list (cron-secret protected)
+└─ cron-worker/          # separate deployable Worker — see "Winners email" above
+   ├─ worker.js
+   └─ wrangler.toml
 ```

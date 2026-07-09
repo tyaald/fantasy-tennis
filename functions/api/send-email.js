@@ -54,8 +54,7 @@ export async function onRequestPost(context) {
     },
     body: JSON.stringify({
       from: env.FROM_EMAIL,
-      to: env.FROM_EMAIL,   // sender is the visible "to"
-      bcc: emails,           // everyone else is blind-copied
+      to: [...new Set([env.FROM_EMAIL, ...emails])],   // everyone's visible, reply-all works
       subject,
       html: body.html,
     }),
