@@ -617,8 +617,31 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
 
   // standings — caps apply only to template-era events (legacy events scored uncapped)
   const capsApply = !UNCAPPED_EVENTS.has(ek);
+  const CAP = Object.fromEntries(CATEGORIES.map((c) => [c.key, c.cap]));
   const sideScore = (picks) =>
     CATEGORIES.reduce((sum, c) => sum + scoreFor(results[picks[c.key]], c.cap, capsApply), 0);
+
+  // Men's and Women's are separate competitions with separate champions, so the
+  // tiebreaker below compares only within one bracket's own picks at a time —
+  // never combining a Men's pick with a Women's pick.
+  const sideCat = (r, side, key) => scoreFor(results[(r[side] || {})[key]], CAP[key], capsApply);
+  const sideBestSF = (r, side) => Math.max(sideCat(r, side, "sf1"), sideCat(r, side, "sf2"));
+
+  // Official tiebreaker order when a bracket's totals are level: Champion, Runner-up,
+  // Best Semi-Finalist, Dreamer, Long Shot, Dark Horse — then name as a final, stable tiebreak.
+  const sideCompare = (side) => (a, b) => {
+    const pts = side === "men" ? "men_pts" : "women_pts";
+    return (
+      b[pts] - a[pts] ||
+      sideCat(b, side, "winner") - sideCat(a, side, "winner") ||
+      sideCat(b, side, "runnerUp") - sideCat(a, side, "runnerUp") ||
+      sideBestSF(b, side) - sideBestSF(a, side) ||
+      sideCat(b, side, "dreamer") - sideCat(a, side, "dreamer") ||
+      sideCat(b, side, "longShot") - sideCat(a, side, "longShot") ||
+      sideCat(b, side, "darkHorse") - sideCat(a, side, "darkHorse") ||
+      a.name.localeCompare(b.name)
+    );
+  };
 
   const standings = pool
     .map((r) => {
@@ -626,10 +649,10 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
       const w = sideScore(r.women || {});
       return { ...r, men_pts: m, women_pts: w, total: m + w };
     })
-    .sort((a, b) => b.total - a.total);
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
 
-  const menRanked = [...standings].sort((a, b) => b.men_pts - a.men_pts);
-  const womenRanked = [...standings].sort((a, b) => b.women_pts - a.women_pts);
+  const menRanked = [...standings].sort(sideCompare("men"));
+  const womenRanked = [...standings].sort(sideCompare("women"));
   const rankedFor = (view) => (view === "men" ? menRanked : view === "women" ? womenRanked : standings);
 
   // a side champion is the highest scorer on that draw, but only once results exist
@@ -1150,6 +1173,28 @@ function RulesTab({ capsApply }) {
             how they were originally recorded.
           </p>
         )}
+      </div>
+
+      <div className="board" style={{ marginTop: 14 }}>
+        <div className="board-head"><span className="dot" />Tiebreakers</div>
+        <p className="muted" style={{ padding: "0 2px 4px" }}>
+          Men's and Women's are separate competitions with separate champions. If two or more
+          entries are level within the <em>same</em> bracket, that bracket's winner is determined by
+          working down this order — using only that bracket's own picks — until the tie breaks:
+        </p>
+        <ol className="muted" style={{ margin: 0, paddingLeft: 22, lineHeight: 1.8 }}>
+          <li>Champion</li>
+          <li>Runner-up</li>
+          <li>Best Semi-Finalist (your higher-scoring of that bracket's two semi-finalist picks)</li>
+          <li>Dreamer</li>
+          <li>Long Shot</li>
+          <li>Dark Horse</li>
+        </ol>
+        <p className="muted" style={{ padding: "4px 2px 4px" }}>
+          A Men's pick is never compared against a Women's pick — each bracket is tie-broken purely
+          on its own picks. This is applied automatically on the Standings tab (Men's and Women's
+          views).
+        </p>
       </div>
 
       <div className="board" style={{ marginTop: 14 }}>
