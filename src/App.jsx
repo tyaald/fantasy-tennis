@@ -764,7 +764,7 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
 
       {/* ---------- TABS ---------- */}
       <nav className="tabs">
-        {[["picks","Make picks"],["board","Standings"],["records","Record Books"],["rules","Rules"],["invite","Join & Notify"]].map(([id,lbl]) => (
+        {[["picks","Make picks"],["board","Standings"],["bracket","Bracket"],["records","Record Books"],["rules","Rules"],["invite","Join & Notify"]].map(([id,lbl]) => (
           <button key={id} className={"tab" + (tab === id ? " active" : "")} onClick={() => setTab(id)}>{lbl}</button>
         ))}
       </nav>
@@ -958,6 +958,9 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
           </section>
         )}
 
+        {/* ============ BRACKET ============ */}
+        {tab === "bracket" && <BracketTab tourName={tour.name} year={year} accent={accent} />}
+
         {/* ============ RECORD BOOKS ============ */}
         {tab === "records" && (
           <section>
@@ -1145,6 +1148,99 @@ function Sheet({ rows, view, results, capsApply, hideNames }) {
 /* ------------------------------------------------------------------ */
 /*  RULES                                                              */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/*  BRACKET  (columns-per-round view, built from the ESPN scraper)     */
+/* ------------------------------------------------------------------ */
+
+function BracketTab({ tourName, year, accent }) {
+  const [side, setSide] = useState("men"); // men | women
+  const [bracket, setBracket] = useState(null); // { atp: [...], wta: [...] }
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [fetchedAt, setFetchedAt] = useState(null);
+
+  const load = async () => {
+    setLoading(true); setError("");
+    try {
+      const r = await fetch(`/api/results?name=${encodeURIComponent(tourName)}`);
+      if (!r.ok) throw new Error(`Request failed (${r.status})`);
+      const data = await r.json();
+      setBracket(data.bracket || { atp: [], wta: [] });
+      setFetchedAt(Date.now());
+    } catch (err) {
+      setError(err.message || "Couldn't load the bracket.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [tourName, year]); // eslint-disable-line
+
+  const rounds = bracket ? (side === "men" ? bracket.atp : bracket.wta) : [];
+
+  return (
+    <section>
+      <h2 className="sec-title">Bracket</h2>
+      <p className="muted" style={{ padding: "0 2px 10px" }}>
+        Live draw for {tourName} {year}, pulled from the same free ESPN feed the auto-results
+        fetch uses. This is unofficial and best-effort — round labels and coverage can be patchy
+        outside the current match window; if something looks off, the site itself is still the
+        source of truth for scoring, not this view.
+      </p>
+
+      <div className="board-toolbar" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <div className="seg" role="tablist">
+          {[["men","Men's"],["women","Women's"]].map(([id, lbl]) => (
+            <button
+              key={id} role="tab" aria-selected={side === id}
+              className={"seg-btn" + (side === id ? " active" : "")}
+              onClick={() => setSide(id)}
+            >{lbl}</button>
+          ))}
+        </div>
+        <button className="ghost" onClick={load} disabled={loading}>
+          {loading ? "Loading…" : "⟳ Reload bracket"}
+        </button>
+        {fetchedAt && !loading && (
+          <span className="muted small">Updated {new Date(fetchedAt).toLocaleTimeString()}</span>
+        )}
+        {error && <span className="fetch-err">{error}</span>}
+      </div>
+
+      {!loading && !error && !rounds.length && (
+        <div className="empty">No matches found yet for this event on the {side === "men" ? "ATP" : "WTA"} feed.</div>
+      )}
+
+      {rounds.length > 0 && (
+        <div className="bracket-scroll">
+          {rounds.map((rnd) => (
+            <div className="bracket-col" key={rnd.label}>
+              <div className="bracket-col-head">{rnd.label}</div>
+              {rnd.matches.map((m, i) => (
+                <div className={"bracket-match" + (m.completed ? "" : " live")} key={i}>
+                  {[m.p1, m.p2].map((p, j) => {
+                    const won = m.completed && m.winner && norm2(p.name) === norm2(m.winner);
+                    const lost = m.completed && m.winner && !won;
+                    return (
+                      <div className={"bracket-player" + (won ? " won" : "") + (lost ? " lost" : "")} key={j}
+                        style={won ? { borderColor: accent } : undefined}>
+                        <span className="bp-name">{p.name}</span>
+                        {p.seed != null && <span className="seed-badge">#{p.seed}</span>}
+                      </div>
+                    );
+                  })}
+                  {!m.completed && <div className="bracket-live-tag">live / upcoming</div>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+const norm2 = (s) => String(s || "").toLowerCase().trim();
 
 function RulesTab({ capsApply }) {
   return (
@@ -1771,4 +1867,20 @@ const CSS = `
 .email-preview{background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--accent);
   border-radius:10px; padding:16px 18px; font-size:14px; line-height:1.6; color:var(--text)}
 .email-preview a{color:var(--glow)}
+
+/* bracket */
+.bracket-scroll{display:flex; gap:14px; overflow-x:auto; padding-bottom:10px}
+.bracket-col{flex:0 0 220px; display:flex; flex-direction:column; gap:10px}
+.bracket-col-head{font-family:'Barlow Condensed',sans-serif; text-transform:uppercase; letter-spacing:.06em;
+  font-size:12.5px; color:var(--muted); padding-bottom:4px; border-bottom:1px solid var(--line)}
+.bracket-match{background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+.bracket-match.live{border-color:var(--accent); box-shadow:0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent)}
+.bracket-player{display:flex; align-items:center; justify-content:space-between; gap:6px;
+  padding:8px 10px; font-size:13.5px; border-bottom:1px solid var(--line)}
+.bracket-player:last-child{border-bottom:none}
+.bracket-player.won{font-weight:700; border-left:3px solid var(--accent)}
+.bracket-player.lost{color:var(--muted); text-decoration:line-through; text-decoration-color:color-mix(in srgb, var(--muted) 50%, transparent)}
+.bp-name{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.bracket-live-tag{font-family:'Barlow Condensed',sans-serif; text-transform:uppercase; letter-spacing:.06em;
+  font-size:10.5px; color:var(--accent); text-align:center; padding:4px 0; background:var(--panel2)}
 `;

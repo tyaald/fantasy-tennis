@@ -175,6 +175,29 @@ rather keep addresses private and lose reply-all, switch `to: [...]` back to `to
 There's no reliable way to auto-detect when a tournament actually releases its draw (no schedule
 or feed for that), so sending stays a one-click action you fire whenever the draw is out.
 
+## Bracket tab
+
+Shows the live draw as columns per round (Round of 128 → ... → Final), pulled from the same free
+ESPN feed the auto-results fetch already uses. Winners are highlighted; unplayed/live matches are
+marked. Toggle between Men's and Women's, "⟳ Reload bracket" to refresh.
+
+This required upgrading `functions/api/results.js`, which previously only returned each player's
+*total* match-win count and threw away everything else. It now also keeps each individual match
+(both players, the round, and the winner) grouped by round, exposed as a new `bracket: {atp, wta}`
+field alongside the existing `players`/`seeds`/`matches` fields (unchanged, so nothing else that
+reads this endpoint broke).
+
+**What this isn't:** a pixel-perfect bracket with connecting lines between exact slot positions —
+ESPN's feed doesn't reliably expose slot/seed positions, only round-by-round match results. What
+you get instead is "columns of rounds, matches as cards, winners carried forward" — reads as a
+bracket, doesn't require guessing at slot geometry.
+
+**Extra scraper risk worth knowing:** round names (`roundLabel` in `functions/api/results.js`) are
+read from several guessed field names since ESPN doesn't document this — if none match, a match
+gets bucketed under "Unknown round" rather than dropped, so a labeling miss is visible instead of
+silently losing data. Same "unverified feed" caveat as the rest of the scraper applies here, only
+more so, since this now depends on more of ESPN's undocumented shape than the simple win-tally did.
+
 ## Picks stay anonymous — and locked — once the tournament starts
 
 Nobody can see anyone else's picks on the Standings tab until results start coming in for that

@@ -1,11 +1,25 @@
-// Cloudflare Pages Function: tally singles match wins per player from ESPN's
-// unofficial tennis scoreboard JSON. No API key, no cost.
+// Cloudflare Pages Function: tally singles match wins per player, AND expose the
+// individual matches themselves (grouped by round) so the site can render a
+// columns-per-round bracket view, from ESPN's unofficial tennis scoreboard JSON.
+// No API key, no cost.
 //
 // IMPORTANT: ESPN's tennis feed is UNOFFICIAL and its exact JSON shape can change
 // without notice (and tennis is one of ESPN's less consistent feeds). The parser
 // below walks the response defensively rather than hard-coding deep paths, but you
 // should verify it once against a live response and tweak `singleAthlete` /
-// `isCompleted` if ESPN's field names differ. See README "Verifying the scraper".
+// `isCompleted` / `roundLabel` if ESPN's field names differ. See README
+// "Verifying the scraper".
+//
+// Round labels are read defensively from several possible fields (see
+// `roundLabel` below) since ESPN doesn't document this shape. If a match's round
+// can't be identified it's bucketed under "Unknown round" rather than dropped, so
+// missing data is visible instead of silently disappearing.
+//
+// Also note: like the win-tally above, this has no explicit multi-week date
+// range by default (see the `dates` param) — without it, ESPN's scoreboard
+// endpoint returns whatever its own default window is, which may not cover the
+// entire two-week event. Pass `?dates=YYYYMMDD-YYYYMMDD` for a specific event's
+// full span if the bracket looks incomplete.
 //
 // Query params:
 //   ?name=Australian Open   (optional) only count events whose name matches
@@ -50,6 +64,34 @@ function singleAthlete(c) {
   return { name, seed: numOrNull(c.seed ?? c.curatedRank?.current ?? a.seed) };
 }
 
+// Best-effort round name for a match — ESPN doesn't document a stable field for
+// this, so try several plausible spots before giving up.
+function roundLabel(m) {
+  return (
+    m.notes?.[0]?.headline ||
+    m.round?.displayName ||
+    m.round?.text ||
+    m.type?.text ||
+    m.competitionType?.text ||
+    m.header ||
+    "Unknown round"
+  );
+}
+
+// Canonical left-to-right column order for the bracket, independent of whatever
+// order ESPN happens to list rounds in. Unrecognized labels sort to the end.
+function roundRank(label) {
+  const s = norm(label);
+  if (/\b128\b/.test(s)) return 1;
+  if (/\b64\b/.test(s)) return 2;
+  if (/\b32\b/.test(s)) return 3;
+  if (/\b16\b/.test(s) || /fourth round|4th round/.test(s)) return 4;
+  if (/quarter/.test(s)) return 5;
+  if (/semi/.test(s)) return 6;
+  if (/\bfinal\b/.test(s)) return 7;
+  return 99;
+}
+
 export async function onRequest(context) {
   const url = new URL(context.request.url);
   const dates = url.searchParams.get("dates") || "";
@@ -59,6 +101,7 @@ export async function onRequest(context) {
   const seeds = {};   // normFullName -> seed
   let matchesSeen = 0;
   const sources = [];
+  const bracket = { atp: [], wta: [] };
 
   for (const lg of ["atp", "wta"]) {
     let data;
@@ -80,21 +123,35 @@ export async function onRequest(context) {
 
     const matches = [];
     collectMatches(root, matches);
+
+    const roundsMap = {}; // label -> { label, rank, matches: [] }
+
     for (const m of matches) {
-      if (!isCompleted(m)) continue;
-      const winner = m.competitors.find((c) => c.winner === true || c.winner === "true");
-      if (!winner) continue;
-      const w = singleAthlete(winner);
-      if (!w) continue; // doubles or unparseable
-      matchesSeen++;
-      const key = norm(w.name);
-      (players[key] || (players[key] = { name: w.name, wins: 0 })).wins++;
-      for (const c of m.competitors) {
-        const s = singleAthlete(c);
-        if (s && s.seed != null) seeds[norm(s.name)] = s.seed;
+      const [p1, p2] = m.competitors.map(singleAthlete);
+      if (!p1 || !p2) continue; // doubles or unparseable — skip for both tally and bracket
+
+      // seed lookup, used elsewhere on the site
+      if (p1.seed != null) seeds[norm(p1.name)] = p1.seed;
+      if (p2.seed != null) seeds[norm(p2.name)] = p2.seed;
+
+      const completed = isCompleted(m);
+      const winnerComp = m.competitors.find((c) => c.winner === true || c.winner === "true");
+      const winnerName = winnerComp ? singleAthlete(winnerComp)?.name || null : null;
+
+      if (completed && winnerName) {
+        matchesSeen++;
+        const key = norm(winnerName);
+        (players[key] || (players[key] = { name: winnerName, wins: 0 })).wins++;
       }
+
+      const label = roundLabel(m);
+      const rank = roundRank(label);
+      if (!roundsMap[label]) roundsMap[label] = { label, rank, matches: [] };
+      roundsMap[label].matches.push({ p1, p2, winner: completed ? winnerName : null, completed });
     }
+
+    bracket[lg] = Object.values(roundsMap).sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
   }
 
-  return json({ players, seeds, matches: matchesSeen, sources });
+  return json({ players, seeds, matches: matchesSeen, sources, bracket });
 }
