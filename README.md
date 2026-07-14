@@ -175,22 +175,61 @@ rather keep addresses private and lose reply-all, switch `to: [...]` back to `to
 There's no reliable way to auto-detect when a tournament actually releases its draw (no schedule
 or feed for that), so sending stays a one-click action you fire whenever the draw is out.
 
+## Picks stay anonymous until the tournament starts
+
+Nobody can see anyone else's picks on the Standings tab until results start coming in for that
+event. Cells show a 🔒 instead of the player's name; totals stay at 0 for everyone in the
+meantime. You can still see your own picks any time via "Load my picks" on the Make Picks tab —
+this only affects what other entrants can see.
+
+**How "started" is detected:** `Object.keys(results).length > 0` for the current event — i.e. the
+moment at least one match result has been recorded (via "Apply suggested" or the auto-fetch flow).
+There's no explicit tournament-start date stored anywhere, so this piggybacks on the same results
+data the rest of the app already tracks rather than adding a new field to keep in sync. The
+practical effect: reveal happens whenever the *first* result gets applied, which for most people
+will be shortly after the first match finishes.
+
 ## Winners email: fully automatic, no button
 
-When both a men's and women's champion have been decided, everyone on the mailing list gets a
-short "champions crowned" email automatically — no one has to open the site or click anything.
+When both a men's and women's tennis champion have been decided, two things happen automatically —
+no one has to open the site or click anything:
+
+- **The pool's own champions get recorded to the Record Books** — same shared `champions` ledger
+  the site's "Record to Record Books" button writes to. If you'd already recorded it manually by
+  the time this runs, your entry is left alone; this only fills it in if nobody has yet.
+- **The mailing list gets an email** announcing who won each bracket of the pool — the pool
+  participant with the highest Men's score and the one with the highest Women's score, using the
+  exact same scoring and tiebreak order (Champion, Runner-up, Best Semi-Finalist, Dreamer, Long
+  Shot, Dark Horse — compared only within one bracket) as the Standings tab. This can never
+  disagree with what the site shows, because it's the same comparator, just re-implemented for the
+  server since this function can't import from `src/App.jsx`.
+
+Recording to the Record Books happens regardless of whether `RESEND_API_KEY`/`FROM_EMAIL` are set —
+so even without email configured, results still get archived automatically. Each event is only
+ever processed once (tracked via a `winners-sent:<event>` KV flag), so if email fails (e.g. Resend
+isn't set up yet), it won't keep retrying that same event once it's already been recorded.
+
+Note: this does **not** announce who won the real tournament — the men's/women's ATP/WTA champion
+is only used internally as the "the tournament is actually over" signal to know when to fire.
 
 **How it detects "the tournament is over":** `functions/api/winners-check.js` looks at every
 tournament the pool has actually used this year (i.e. has a saved roster from "Load field from
 draw"), pulls live results from the same ESPN scraper the site already uses
 (`functions/api/results.js`), and checks whether a player from the men's roster and a player from
 the women's roster has each reached 7 match wins — the number needed to win a 128-player draw.
-The moment both are found, it emails the list once and remembers it did (so it won't send twice).
+The moment both are found, it scores every saved pick against those same live results to work out
+the pool's own bracket winners, emails the list once with everything, and remembers it did (so it
+won't send twice).
 
 **Why there's a second, separate Worker (`/cron-worker`):** Cloudflare Pages Functions can't run
 on a schedule — only standalone Workers can. So `cron-worker/worker.js` is a tiny, separate Worker
 whose only job is to wake up periodically and ping `/api/winners-check` on your Pages site. It
 holds no logic and no KV of its own.
+
+**Keeping the two copies of the scoring rules in sync:** `functions/api/winners-check.js` can't
+import from `src/App.jsx` (different runtime), so `CATEGORIES` and `UNCAPPED_EVENTS` are
+duplicated at the top of that file with a comment marking them as such. If you ever change a cap,
+a seed threshold, or add an uncapped event in `src/App.jsx`, update both.
 
 **Setup:**
 

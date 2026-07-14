@@ -655,16 +655,22 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
   const womenRanked = [...standings].sort(sideCompare("women"));
   const rankedFor = (view) => (view === "men" ? menRanked : view === "women" ? womenRanked : standings);
 
-  // a side champion is the highest scorer on that draw, but only once results exist
-  const sideLeader = (field) => {
-    if (!standings.length) return null;
-    const top = standings.reduce((a, b) => (b[field] > a[field] ? b : a));
+  // "Officially started" = at least one match result exists for this event yet.
+  // Used to keep everyone's picks anonymous on the Standings tab until then.
+  const started = Object.keys(results).length > 0;
+
+  // The pool champion for a bracket is whoever the tiebreak-aware ranking puts first —
+  // same order shown on the Standings tab, so the "champion" banner and Record Books
+  // can never disagree with what people see when they look at the table.
+  const sideLeader = (ranked, field) => {
+    if (!ranked.length) return null;
+    const top = ranked[0];
     if (top[field] <= 0) return null;
     const tied = standings.filter((r) => r[field] === top[field]).map((r) => r.name);
     return { name: top.name, pts: top[field], tied };
   };
-  const menChamp = sideLeader("men_pts");
-  const womenChamp = sideLeader("women_pts");
+  const menChamp = sideLeader(menRanked, "men_pts");
+  const womenChamp = sideLeader(womenRanked, "women_pts");
   const recorded = champions[ek] || null;
 
   const crownChampions = async () => {
@@ -926,8 +932,15 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
               );
             })()}
 
+            {!loading && pool.length > 0 && !started && (
+              <p className="muted" style={{ padding: "2px 2px 10px" }}>
+                🔒 Picks are hidden until the tournament officially begins — you'll see who everyone
+                picked once results start coming in.
+              </p>
+            )}
+
             {!loading && pool.length > 0 && (
-              <Sheet rows={rankedFor(boardView)} view={boardView} results={results} capsApply={capsApply} />
+              <Sheet rows={rankedFor(boardView)} view={boardView} results={results} capsApply={capsApply} hideNames={!started} />
             )}
           </section>
         )}
@@ -1037,14 +1050,20 @@ function AutoFetchPanel({ tourName, year, fetching, error, msg, proposed, picked
   );
 }
 
-function Sheet({ rows, view, results, capsApply }) {
+function Sheet({ rows, view, results, capsApply, hideNames }) {
   const cell = (row, side, c) => {
     const player = row[side]?.[c.key] || "";
     const pts = player ? scoreFor(results[player], c.cap, capsApply) : null;
     return (
       <td className="sc-cell" key={side + c.key}>
-        <span className={"sc-name" + (player ? "" : " empty")}>{player || "—"}</span>
-        {player && <span className="sc-pts">{pts}</span>}
+        {hideNames && player ? (
+          <span className="sc-name sc-hidden">🔒</span>
+        ) : (
+          <>
+            <span className={"sc-name" + (player ? "" : " empty")}>{player || "—"}</span>
+            {player && <span className="sc-pts">{pts}</span>}
+          </>
+        )}
       </td>
     );
   };
@@ -1210,6 +1229,9 @@ function RulesTab({ capsApply }) {
       <div className="board" style={{ marginTop: 14 }}>
         <div className="board-head"><span className="dot" />Good to know</div>
         <ul className="muted" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+          <li>Picks stay hidden from other entrants on the Standings tab until the tournament
+            officially begins — you can see your own picks any time via "Load my picks," but
+            nobody sees anyone else's until results start coming in.</li>
           <li>"Top 10 / 20 / 30" refers to the tournament's own seeding, not ATP/WTA world ranking.</li>
           <li>Feel free to share the pool with others — more entries, bigger pot.</li>
           <li>Enter picks by each event's deadline — see the announcement email or the organizer for the exact cutoff.</li>
@@ -1687,6 +1709,7 @@ const CSS = `
 .sheet tbody tr:first-child .sc-rk{background:var(--accent); color:#fff}
 .sc-name{color:var(--text)}
 .sc-name.empty{color:var(--muted)}
+.sc-name.sc-hidden{color:var(--muted); opacity:.55; letter-spacing:.05em}
 .sc-pts{display:inline-block; margin-left:7px; min-width:15px; text-align:center; font-family:'Barlow Condensed',sans-serif;
   font-weight:700; font-size:12px; color:var(--glow);
   background:color-mix(in srgb, var(--accent) 16%, transparent); border-radius:5px; padding:0 5px}
