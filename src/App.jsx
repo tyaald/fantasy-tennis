@@ -227,7 +227,7 @@ const emptyPicks = () => Object.fromEntries(CATEGORIES.map((c) => [c.key, ""]));
 /*  COMBOBOX                                                           */
 /* ------------------------------------------------------------------ */
 
-function PlayerSelect({ value, onChange, roster, seeds, outsideTop, accent, placeholder }) {
+function PlayerSelect({ value, onChange, roster, seeds, outsideTop, accent, placeholder, disabled }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const wrapRef = useRef(null);
@@ -250,7 +250,7 @@ function PlayerSelect({ value, onChange, roster, seeds, outsideTop, accent, plac
   const showAdd = term && !roster.some((p) => p.toLowerCase() === term) && eligible(q.trim());
 
   const choose = (name) => {
-    if (!eligible(name)) return;
+    if (disabled || !eligible(name)) return;
     onChange(name); setQ(""); setOpen(false);
   };
 
@@ -260,22 +260,24 @@ function PlayerSelect({ value, onChange, roster, seeds, outsideTop, accent, plac
     <div className="combo" ref={wrapRef}>
       <button
         type="button"
-        className={"combo-trigger" + (value ? " filled" : "") + (valueBad ? " bad" : "")}
-        onClick={() => setOpen((o) => !o)}
+        className={"combo-trigger" + (value ? " filled" : "") + (valueBad ? " bad" : "") + (disabled ? " locked" : "")}
+        onClick={() => !disabled && setOpen((o) => !o)}
         style={value && !valueBad ? { borderColor: accent } : undefined}
-        title={valueBad ? `Seeded #${seedOf(value)} — not eligible for this slot` : undefined}
+        title={disabled ? "Locked — the tournament has started" : (valueBad ? `Seeded #${seedOf(value)} — not eligible for this slot` : undefined)}
       >
         <span className={value ? "" : "combo-ph"}>
           {value || placeholder}
           {value && seedOf(value) != null && <span className="seed-badge">#{seedOf(value)}</span>}
         </span>
-        {value ? (
+        {disabled ? (
+          <span className="combo-caret" aria-hidden>🔒</span>
+        ) : value ? (
           <span className="combo-clear" onClick={(e) => { e.stopPropagation(); onChange(""); }}>✕</span>
         ) : (
           <span className="combo-caret">▾</span>
         )}
       </button>
-      {open && (
+      {open && !disabled && (
         <div className="combo-pop">
           <input
             className="combo-input"
@@ -398,6 +400,7 @@ export default function TennisPool() {
   const filledCount = [...Object.values(men), ...Object.values(women)].filter(Boolean).length;
 
   const savePicks = async () => {
+    if (started) { setSaveMsg("Picks are locked — the tournament has started."); return; }
     if (!name.trim()) { setSaveMsg("Add your name first."); return; }
     const rec = { name: name.trim(), men, women, updatedAt: Date.now() };
     const ok = await store.set(pickKey(ek, name), JSON.stringify(rec));
@@ -770,6 +773,13 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
         {/* ============ MAKE PICKS ============ */}
         {tab === "picks" && (
           <section>
+            {started && (
+              <p className="muted" style={{ padding: "0 2px 10px" }}>
+                🔒 Picks are locked — {tour.name} {year} has started, so selections can no longer be
+                changed. You can still see your own picks below.
+              </p>
+            )}
+
             <div className="namebar">
               <input className="name-input" placeholder="Your name (or team handle)" value={name} onChange={(e) => setName(e.target.value)} />
               <button className="ghost" onClick={loadMine}>Load my picks</button>
@@ -811,6 +821,7 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
                           outsideTop={c.outsideTop}
                           accent={accent}
                           placeholder="Select player"
+                          disabled={started}
                         />
                       </div>
                     ))}
@@ -820,7 +831,9 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
             </div>
 
             <div className="save-bar">
-              <button className="primary" onClick={savePicks}>Lock in picks</button>
+              <button className="primary" onClick={savePicks} disabled={started}>
+                {started ? "Locked" : "Lock in picks"}
+              </button>
               {saveMsg && <span className="save-msg">{saveMsg}</span>}
             </div>
             <p className="scoring-note">
@@ -1229,9 +1242,10 @@ function RulesTab({ capsApply }) {
       <div className="board" style={{ marginTop: 14 }}>
         <div className="board-head"><span className="dot" />Good to know</div>
         <ul className="muted" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
-          <li>Picks stay hidden from other entrants on the Standings tab until the tournament
-            officially begins — you can see your own picks any time via "Load my picks," but
-            nobody sees anyone else's until results start coming in.</li>
+          <li>Picks stay hidden from other entrants — and locked from further changes — once the
+            tournament officially begins. You can see your own picks any time via "Load my picks,"
+            but nobody sees anyone else's until results start coming in, and nobody (including you)
+            can edit picks after that point.</li>
           <li>"Top 10 / 20 / 30" refers to the tournament's own seeding, not ATP/WTA world ranking.</li>
           <li>Feel free to share the pool with others — more entries, bigger pot.</li>
           <li>Enter picks by each event's deadline — see the announcement email or the organizer for the exact cutoff.</li>
@@ -1578,6 +1592,7 @@ const CSS = `
 .seed-badge.block{color:#ff9d8a; background:color-mix(in srgb, #ff9d8a 16%, transparent)}
 .combo-trigger.bad{border-color:#ff9d8a !important}
 .combo-trigger.bad .seed-badge{color:#ff9d8a; background:color-mix(in srgb, #ff9d8a 16%, transparent)}
+.combo-trigger.locked{opacity:.6; cursor:not-allowed}
 
 .save-bar{display:flex; align-items:center; gap:14px; margin-top:18px}
 .primary{font-family:'Barlow Condensed',sans-serif; text-transform:uppercase; letter-spacing:.06em;

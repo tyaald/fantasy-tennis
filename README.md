@@ -175,19 +175,31 @@ rather keep addresses private and lose reply-all, switch `to: [...]` back to `to
 There's no reliable way to auto-detect when a tournament actually releases its draw (no schedule
 or feed for that), so sending stays a one-click action you fire whenever the draw is out.
 
-## Picks stay anonymous until the tournament starts
+## Picks stay anonymous — and locked — once the tournament starts
 
 Nobody can see anyone else's picks on the Standings tab until results start coming in for that
 event. Cells show a 🔒 instead of the player's name; totals stay at 0 for everyone in the
 meantime. You can still see your own picks any time via "Load my picks" on the Make Picks tab —
 this only affects what other entrants can see.
 
+Picks are also **locked from further editing** at the same moment — the Make Picks tab disables
+every selector and the save button once the tournament has started, so nobody can watch early
+results and then go back and change a pick. This is enforced in two places:
+
+- **Client-side**: the Make Picks tab disables the form once `started` is true.
+- **Server-side**: `functions/api/kv.js` also rejects any write to a `picks:<event>:*` key once
+  that event has a non-empty `results:<event>` entry — so someone calling the API directly (not
+  through the UI) can't bypass the lock either.
+
 **How "started" is detected:** `Object.keys(results).length > 0` for the current event — i.e. the
 moment at least one match result has been recorded (via "Apply suggested" or the auto-fetch flow).
 There's no explicit tournament-start date stored anywhere, so this piggybacks on the same results
 data the rest of the app already tracks rather than adding a new field to keep in sync. The
-practical effect: reveal happens whenever the *first* result gets applied, which for most people
-will be shortly after the first match finishes.
+practical effect: locking/reveal happens whenever the *first* result gets applied, which for most
+people will be shortly after the first match finishes. One asymmetry worth knowing: the
+server-side check only sees live KV results, not the historical `RESULTS_SEED` baked into the
+frontend bundle — this only matters for old, already-finished events, where there's no realistic
+scenario of someone trying to submit new picks anyway.
 
 ## Winners email: fully automatic, no button
 

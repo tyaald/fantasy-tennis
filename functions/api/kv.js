@@ -36,6 +36,28 @@ export async function onRequest(context) {
     if (method === "PUT") {
       const { key, value } = await request.json();
       if (!key) return json({ error: "missing key" }, 400);
+
+      // Belt-and-suspenders: the UI disables pick editing once the tournament has
+      // started, but that's client-side only. Reject the write here too, so
+      // someone calling this API directly can't bypass the lock. "Started" uses
+      // the same signal as the UI — at least one live result recorded for this
+      // event (picks:<event>:<name> -> results:<event> non-empty). Note this only
+      // sees live KV results, not the historical RESULTS_SEED baked into the
+      // frontend bundle, which only matters for old/already-finished events.
+      const picksMatch = key.match(/^picks:([^:]+):/);
+      if (picksMatch) {
+        const ek = picksMatch[1];
+        const resultsRaw = await kv.get(`results:${ek}`);
+        if (resultsRaw) {
+          try {
+            const parsed = JSON.parse(resultsRaw);
+            if (parsed && Object.keys(parsed).length > 0) {
+              return json({ error: "Picks are locked — this tournament has started." }, 403);
+            }
+          } catch { /* malformed stored value — fail open, don't block on a parse error */ }
+        }
+      }
+
       await kv.put(key, value == null ? "" : String(value));
       return json({ ok: true });
     }
