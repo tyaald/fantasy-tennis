@@ -55,12 +55,22 @@ function aliasesFor(nameFilter) {
   return NAME_ALIASES[nameFilter] || [nameFilter];
 }
 
-// recursively collect any object that looks like a match (has 2+ competitors)
-function collectMatches(node, out) {
-  if (!node || typeof node !== "object") return;
-  if (Array.isArray(node)) { for (const x of node) collectMatches(x, out); return; }
-  if (Array.isArray(node.competitors) && node.competitors.length >= 2) out.push(node);
-  for (const k in node) { const v = node[k]; if (v && typeof v === "object") collectMatches(v, out); }
+// Matches live at ESPN's standard, documented site-API location: events[].competitions[].
+// This USED to be an unconstrained recursive walk that grabbed any object anywhere in the
+// response with a 2+-entry `competitors` array — but combined ATP+WTA weeks (e.g. Indian
+// Wells) embed extra nested stuff elsewhere in the payload (cross-tour links, related-event
+// blocks) that can coincidentally look match-shaped, which was leaking the other tour's
+// players into this one's bracket and inflating some rounds with bogus entries. Scoping to
+// the documented path only is a strict narrowing — it can drop false positives, never add
+// legitimate matches ESPN wasn't already putting there.
+function collectMatches(root, out) {
+  const events = Array.isArray(root?.events) ? root.events : [];
+  for (const ev of events) {
+    const comps = Array.isArray(ev?.competitions) ? ev.competitions : [];
+    for (const c of comps) {
+      if (Array.isArray(c?.competitors) && c.competitors.length >= 2) out.push(c);
+    }
+  }
 }
 
 function isCompleted(comp) {
