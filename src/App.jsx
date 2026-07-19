@@ -1412,6 +1412,8 @@ const DEFAULT_BUYIN = "$10 for students and $20 for those who are not";
 // Best-effort official draw-page links per tournament. URL patterns are pretty stable
 // year to year, but sites occasionally restructure — double-check before sending,
 // especially early in a season.
+// DUPLICATED in functions/api/winners-check.js (server-side, for the fully-automatic
+// draw announcement) — no shared import between the two runtimes, so update both.
 const DRAW_LINKS = {
   ao:  { men: "https://ausopen.com/draws",                                   women: "https://ausopen.com/draws" },
   iw:  { men: "https://bnpparibasopen.com/scores/draws",                     women: "https://bnpparibasopen.com/scores/draws?selected=womensSingles" },
@@ -1567,7 +1569,7 @@ function InviteTab({ tid, tourName, year, accent }) {
       const res = await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password, tournament, html: emailHtml, ek }),
+        body: JSON.stringify({ password, tournament, html: emailHtml, ek, buyin, ruleNote, sender }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Send failed.");

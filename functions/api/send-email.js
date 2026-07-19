@@ -74,6 +74,23 @@ export async function onRequestPost(context) {
     await kv.put(`email-sent:${body.ek}`, JSON.stringify({ sentAt: Date.now() }));
   }
 
+  // The fully-automatic draw-detection email (functions/api/winners-check.js)
+  // has no source for wording like the buy-in line or rule note — there's no
+  // external feed for that. So every manual send updates a standing default,
+  // and auto-sends just reuse whatever you used last time. Only stored if
+  // provided, so older clients that don't send these fields don't wipe it out.
+  if (body.buyin || body.ruleNote != null || body.sender) {
+    const prev = await kv.get("email-defaults");
+    let defaults = {};
+    try { defaults = prev ? JSON.parse(prev) : {}; } catch { defaults = {}; }
+    await kv.put("email-defaults", JSON.stringify({
+      buyin: body.buyin ?? defaults.buyin,
+      ruleNote: body.ruleNote ?? defaults.ruleNote,
+      sender: body.sender ?? defaults.sender,
+      updatedAt: Date.now(),
+    }));
+  }
+
   return json({ ok: true, count: emails.length });
 }
 

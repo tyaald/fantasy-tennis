@@ -91,6 +91,7 @@ Every push to the connected branch now redeploys automatically.
 | Draw-release emails  | `functions/api/send-email.js`        | `RESEND_API_KEY`, `FROM_EMAIL`, `SEND_PASSWORD` |
 | Automatic winners email | `functions/api/winners-check.js` + `cron-worker/` | `CRON_SECRET` (+ the three above) |
 | Pick-lock deadline + countdown | `functions/api/deadline.js` | `SEND_PASSWORD` (reused, no new secret) |
+| Automatic draw announcement | `functions/api/winners-check.js` + `functions/api/anthropic.js` | `ANTHROPIC_API_KEY`, `RESEND_API_KEY`, `FROM_EMAIL` (all reused) |
 
 The front end calls `/api/kv` and `/api/anthropic` — same-origin, so no CORS and the key never
 reaches the browser.
@@ -284,6 +285,44 @@ people will be shortly after the first match finishes. One asymmetry worth knowi
 server-side check only sees live KV results, not the historical `RESULTS_SEED` baked into the
 frontend bundle — this only matters for old, already-finished events, where there's no realistic
 scenario of someone trying to submit new picks anyway.
+
+## Draw announcement: fully automatic, zero review
+
+⚠️ **This sends an unreviewed email to your entire mailing list with no human in the loop.** Worth
+reading this whole section once before it's live, since it's a meaningfully bigger leap than
+everything else in this file.
+
+**What it does:** every cron cycle, `functions/api/winners-check.js` checks whether ESPN shows a
+tournament's draw as out (a scheduled first match exists — `firstMatchAt` from
+`functions/api/results.js`). The moment that's true for an event nobody's been told about yet, it:
+
+1. Builds the player roster using the exact same AI + web-search call "Load field from draw"
+   already uses (`functions/api/anthropic.js`) — just triggered server-side instead of by someone
+   opening the Make Picks tab.
+2. Composes the draw-release email — tournament name and draw links are computable
+   (`DRAW_LINKS`, duplicated from `src/App.jsx` — **keep both copies in sync manually**, there's no
+   shared import between the two runtimes), the deadline is the tournament's real first-match time
+   (no more "10:59 AM PST tomorrow" guessing), and the buy-in / rule-note / sign-off wording reuses
+   whatever you used in your **most recent manual send** (persisted to `email-defaults` in
+   `POOL_KV` by `functions/api/send-email.js` on every successful manual send).
+3. Sends it. Nobody sees a preview first.
+
+**Send at least one manual email before relying on this.** `email-defaults` doesn't exist until a
+human send has happened once. Until then, an auto-sent email falls back to generic placeholder
+wording for the buy-in line and omits the rule note entirely — not wrong, just not yours.
+
+**Two independent, compounding sources of risk, both now unreviewed:**
+- The AI-built roster could have a wrong name, a wrong seed, or an incomplete field — previously
+  you'd likely notice this on the Make Picks tab before anyone relied on it; now it goes straight
+  into an email.
+- The ESPN "draw is out" detection is the same unofficial, undocumented feed flagged everywhere
+  else in this file. A false read (or a naming mismatch like the Indian Wells one from earlier)
+  means either an email fires on stale/wrong data, or doesn't fire at all and nobody notices until
+  someone asks where the announcement is.
+
+**Practical recommendation:** watch your inbox closely around the first few draws after turning
+this on. If anything looks off, you still have full manual control — compose and send from Join &
+Notify same as always — and can always email everyone a correction.
 
 ## Winners email: fully automatic, no button
 
