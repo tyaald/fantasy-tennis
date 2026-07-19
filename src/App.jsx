@@ -14,6 +14,48 @@ const TOURNAMENTS = [
 
 const YEARS = [2024, 2025, 2026, 2027];
 
+// Real (or, for not-yet-played future events, best-estimate) start/end dates for
+// each tournament+year, padded a few days on either side. This is the fix for
+// the bracket/results/draw fetches showing the wrong players: /api/results
+// hits ESPN's live scoreboard feed, and without an explicit `dates` window ESPN
+// falls back to its own undocumented default (effectively "today"), which has
+// nothing to do with whatever tournament+year is selected in the UI — so a past
+// or future event would show whatever happens to be on ESPN's scoreboard right
+// now, filtered only by name. Passing the real calendar window fixes that.
+// Padding is generous (a few days) since extra days are harmless — the results
+// endpoint still filters by tournament name within the window.
+const TOURNAMENT_WINDOWS = {
+  "ao-2024":  ["20240108", "20240129"],
+  "ao-2025":  ["20250106", "20250127"],
+  "ao-2026":  ["20260112", "20260202"],
+  "ao-2027":  ["20270111", "20270201"], // estimated — 2027 dates not yet official
+
+  "iw-2024":  ["20240301", "20240318"],
+  "iw-2025":  ["20250228", "20250317"],
+  "iw-2026":  ["20260304", "20260323"],
+  "iw-2027":  ["20270303", "20270322"], // estimated
+
+  "rg-2024":  ["20240520", "20240610"],
+  "rg-2025":  ["20250519", "20250609"],
+  "rg-2026":  ["20260518", "20260608"], // estimated
+  "rg-2027":  ["20270517", "20270607"], // estimated
+
+  "wim-2024": ["20240625", "20240715"],
+  "wim-2025": ["20250625", "20250714"],
+  "wim-2026": ["20260624", "20260713"], // estimated
+  "wim-2027": ["20270623", "20270712"], // estimated
+
+  "uso-2024": ["20240819", "20240909"],
+  "uso-2025": ["20250818", "20250908"],
+  "uso-2026": ["20260817", "20260907"], // estimated
+  "uso-2027": ["20270816", "20270906"], // estimated
+};
+
+function datesParamFor(tid, year) {
+  const w = TOURNAMENT_WINDOWS[`${tid}-${year}`];
+  return w ? `${w[0]}-${w[1]}` : "";
+}
+
 // cap = the highest score this slot can earn (mirrors the MIN() caps in the sheet)
 const CATEGORIES = [
   { key: "winner",   label: "Winner",          cap: null, outsideTop: null, hint: "Champion · up to 7" },
@@ -470,7 +512,8 @@ export default function TennisPool() {
 
     // 1) Free path: scrape ESPN's JSON, match scraped winners to picks by surname.
     const viaEspn = async () => {
-      const r = await fetch(`/api/results?name=${encodeURIComponent(tour.name)}`);
+      const dates = datesParamFor(tid, year);
+      const r = await fetch(`/api/results?name=${encodeURIComponent(tour.name)}${dates ? `&dates=${dates}` : ""}`);
       if (!r.ok) return null;
       const d = await r.json();
       if (!d || !d.players || !Object.keys(d.players).length) return null;
@@ -612,7 +655,8 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
       let via = "scrape";
 
       try {
-        const r = await fetch(`/api/results?name=${encodeURIComponent(tour.name)}`);
+        const dates = datesParamFor(tid, year);
+        const r = await fetch(`/api/results?name=${encodeURIComponent(tour.name)}${dates ? `&dates=${dates}` : ""}`);
         const data = r.ok ? await r.json() : null;
         m = rosterFromBracket(data?.bracket?.atp);
         w = rosterFromBracket(data?.bracket?.wta);
@@ -1013,7 +1057,7 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
         )}
 
         {/* ============ BRACKET ============ */}
-        {tab === "bracket" && <BracketTab tourName={tour.name} year={year} accent={accent} />}
+        {tab === "bracket" && <BracketTab tourId={tid} tourName={tour.name} year={year} accent={accent} />}
 
         {/* ============ RECORD BOOKS ============ */}
         {tab === "records" && (
@@ -1241,7 +1285,12 @@ function Countdown({ deadline, tourName, year }) {
   );
 }
 
-function BracketTab({ tourName, year, accent }) {
+// Height (px) of one match slot in round 1 of the tree — later rounds get
+// treeHeight / (their own match count), so slots grow as the field narrows.
+// Just needs to be tall enough for a two-line match card to sit in comfortably.
+const BRACKET_SLOT_H = 84;
+
+function BracketTab({ tourId, tourName, year, accent }) {
   const [side, setSide] = useState("men"); // men | women
   const [bracket, setBracket] = useState(null); // { atp: [...], wta: [...] }
   const [loading, setLoading] = useState(false);
@@ -1251,7 +1300,8 @@ function BracketTab({ tourName, year, accent }) {
   const load = async () => {
     setLoading(true); setError("");
     try {
-      const r = await fetch(`/api/results?name=${encodeURIComponent(tourName)}`);
+      const dates = datesParamFor(tourId, year);
+      const r = await fetch(`/api/results?name=${encodeURIComponent(tourName)}${dates ? `&dates=${dates}` : ""}`);
       if (!r.ok) throw new Error(`Request failed (${r.status})`);
       const data = await r.json();
       setBracket(data.bracket || { atp: [], wta: [] });
@@ -1263,18 +1313,21 @@ function BracketTab({ tourName, year, accent }) {
     }
   };
 
-  useEffect(() => { load(); }, [tourName, year]); // eslint-disable-line
+  useEffect(() => { load(); }, [tourId, tourName, year]); // eslint-disable-line
 
   const rounds = bracket ? (side === "men" ? bracket.atp : bracket.wta) : [];
+  const slotCount = rounds[0]?.matches.length || 0;
+  const treeHeight = slotCount * BRACKET_SLOT_H;
 
   return (
     <section>
       <h2 className="sec-title">Bracket</h2>
       <p className="muted" style={{ padding: "0 2px 10px" }}>
-        Live draw for {tourName} {year}, pulled from the same free ESPN feed the auto-results
-        fetch uses. This is unofficial and best-effort — round labels and coverage can be patchy
-        outside the current match window; if something looks off, the site itself is still the
-        source of truth for scoring, not this view.
+        Draw for {tourName} {year}, pulled from the same free ESPN feed the auto-results fetch
+        uses, scoped to that event's actual dates. This is unofficial and best-effort — round
+        labels and coverage can be patchy, especially for smaller events or ones ESPN hasn't
+        fully ingested yet; if something looks off, the site itself is still the source of truth
+        for scoring, not this view.
       </p>
 
       <div className="board-toolbar" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -1302,27 +1355,40 @@ function BracketTab({ tourName, year, accent }) {
 
       {rounds.length > 0 && (
         <div className="bracket-scroll">
-          {rounds.map((rnd) => (
-            <div className="bracket-col" key={rnd.label}>
-              <div className="bracket-col-head">{rnd.label}</div>
-              {rnd.matches.map((m, i) => (
-                <div className={"bracket-match" + (m.completed ? "" : " live")} key={i}>
-                  {[m.p1, m.p2].map((p, j) => {
-                    const won = m.completed && m.winner && norm2(p.name) === norm2(m.winner);
-                    const lost = m.completed && m.winner && !won;
-                    return (
-                      <div className={"bracket-player" + (won ? " won" : "") + (lost ? " lost" : "")} key={j}
-                        style={won ? { borderColor: accent } : undefined}>
-                        <span className="bp-name">{p.name}</span>
-                        {p.seed != null && <span className="seed-badge">#{p.seed}</span>}
+          <div className="bracket-tree">
+            {rounds.map((rnd, ri) => {
+              const isLast = ri === rounds.length - 1;
+              const slotH = treeHeight / (rnd.matches.length || 1);
+              return (
+              <div className={"bracket-round" + (isLast ? " last" : "")} key={rnd.label}>
+                <div className="bracket-col-head">{rnd.label}</div>
+                <div
+                  className={"bracket-round-body" + (isLast ? " no-connectors" : "")}
+                  style={{ height: treeHeight || undefined }}
+                >
+                  {rnd.matches.map((m, i) => (
+                    <div className="bracket-match-wrap" key={i} style={{ height: slotH }}>
+                      <div className={"bracket-match" + (m.completed ? "" : " live")}>
+                        {[m.p1, m.p2].map((p, j) => {
+                          const won = m.completed && m.winner && norm2(p.name) === norm2(m.winner);
+                          const lost = m.completed && m.winner && !won;
+                          return (
+                            <div className={"bracket-player" + (won ? " won" : "") + (lost ? " lost" : "")} key={j}
+                              style={won ? { borderColor: accent } : undefined}>
+                              <span className="bp-name">{p.name}</span>
+                              {p.seed != null && <span className="seed-badge">#{p.seed}</span>}
+                            </div>
+                          );
+                        })}
+                        {!m.completed && <div className="bracket-live-tag">live / upcoming</div>}
                       </div>
-                    );
-                  })}
-                  {!m.completed && <div className="bracket-live-tag">live / upcoming</div>}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ))}
+              </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </section>
@@ -2062,11 +2128,31 @@ const CSS = `
 .email-preview a{color:var(--glow)}
 
 /* bracket */
-.bracket-scroll{display:flex; gap:14px; overflow-x:auto; padding-bottom:10px}
-.bracket-col{flex:0 0 220px; display:flex; flex-direction:column; gap:10px}
+/* A real single-elimination tree: each round is a column of fixed-height
+   "slots" (height = tree height / matches in that round), the match card is
+   vertically centered inside its slot, and each slot's ::after draws half a
+   connector (top half for the first of a pair, bottom half for the second).
+   Because slot heights are exact fractions of one shared tree height, the two
+   halves of a pair always meet exactly at their shared slot boundary — which
+   lands exactly on the next round's slot center. No per-match measuring
+   needed, just consistent math. (Byes can throw this off for non-power-of-two
+   rounds, e.g. Indian Wells' first round — the tree still reads fine, the
+   connectors just won't be pixel-perfect for that one transition.) */
+.bracket-scroll{overflow-x:auto; padding-bottom:10px}
+.bracket-tree{display:flex; align-items:flex-start; min-width:max-content}
+.bracket-round{flex:0 0 230px; display:flex; flex-direction:column; margin-right:26px}
+.bracket-round.last{margin-right:0}
 .bracket-col-head{font-family:'Barlow Condensed',sans-serif; text-transform:uppercase; letter-spacing:.06em;
-  font-size:12.5px; color:var(--muted); padding-bottom:4px; border-bottom:1px solid var(--line)}
-.bracket-match{background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  font-size:12.5px; color:var(--muted); padding-bottom:8px; margin-bottom:8px; border-bottom:1px solid var(--line)}
+.bracket-round-body{display:flex; flex-direction:column}
+.bracket-match-wrap{display:flex; align-items:center; position:relative; padding:4px 0; box-sizing:border-box}
+.bracket-round-body:not(.no-connectors) .bracket-match-wrap{ padding-right:26px }
+.bracket-round-body:not(.no-connectors) .bracket-match-wrap::after{
+  content:""; position:absolute; right:0; width:26px; border-right:2px solid var(--line);
+}
+.bracket-round-body:not(.no-connectors) .bracket-match-wrap:nth-child(odd)::after{ top:50%; height:50%; border-top:2px solid var(--line); border-top-right-radius:6px }
+.bracket-round-body:not(.no-connectors) .bracket-match-wrap:nth-child(even)::after{ bottom:50%; height:50%; border-bottom:2px solid var(--line); border-bottom-right-radius:6px }
+.bracket-match{flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden}
 .bracket-match.live{border-color:var(--accent); box-shadow:0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent)}
 .bracket-player{display:flex; align-items:center; justify-content:space-between; gap:6px;
   padding:8px 10px; font-size:13.5px; border-bottom:1px solid var(--line)}
