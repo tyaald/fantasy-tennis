@@ -1,6 +1,7 @@
-// Cloudflare Pages Function: tally singles match wins per player, AND expose the
-// individual matches themselves (grouped by round) so the site can render a
-// columns-per-round bracket view, from ESPN's unofficial tennis scoreboard JSON.
+// Cloudflare Pages Function: tally singles match wins per player, expose the
+// individual matches themselves (grouped by round) for the bracket view, and
+// report the tournament's earliest scheduled match time (used to auto-set the
+// pick-lock deadline) — all from ESPN's unofficial tennis scoreboard JSON.
 // No API key, no cost.
 //
 // IMPORTANT: ESPN's tennis feed is UNOFFICIAL and its exact JSON shape can change
@@ -19,7 +20,7 @@
 // range by default (see the `dates` param) — without it, ESPN's scoreboard
 // endpoint returns whatever its own default window is, which may not cover the
 // entire two-week event. Pass `?dates=YYYYMMDD-YYYYMMDD` for a specific event's
-// full span if the bracket looks incomplete.
+// full span if the bracket (or the first-match-time detection below) looks off.
 //
 // Query params:
 //   ?name=Australian Open   (optional) only count events whose name matches
@@ -38,6 +39,21 @@ function norm(s) {
     .toLowerCase().replace(/-/g, " ").replace(/[^a-z\s']/g, "").replace(/\s+/g, " ").trim();
 }
 const numOrNull = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+
+// ESPN doesn't always use a tournament's popular/display name — e.g. Indian Wells
+// is commonly listed as its sponsor name. Add known aliases here as they're found
+// to be wrong; this list is necessarily incomplete and worth checking against a
+// live response if a bracket or deadline looks off for a given event.
+const NAME_ALIASES = {
+  "indian wells": ["indian wells", "bnp paribas open"],
+  "roland garros": ["roland garros", "french open"],
+  "wimbledon": ["wimbledon", "the championships"],
+  "australian open": ["australian open"],
+  "us open": ["us open"],
+};
+function aliasesFor(nameFilter) {
+  return NAME_ALIASES[nameFilter] || [nameFilter];
+}
 
 // recursively collect any object that looks like a match (has 2+ competitors)
 function collectMatches(node, out) {
@@ -92,6 +108,14 @@ function roundRank(label) {
   return 99;
 }
 
+// Best-effort scheduled start time for a match — try several plausible fields.
+function matchDate(m) {
+  const d = m.date || m.startDate || m.competitions?.[0]?.date;
+  if (!d) return null;
+  const t = new Date(d).getTime();
+  return Number.isNaN(t) ? null : d;
+}
+
 export async function onRequest(context) {
   const url = new URL(context.request.url);
   const dates = url.searchParams.get("dates") || "";
@@ -102,6 +126,7 @@ export async function onRequest(context) {
   let matchesSeen = 0;
   const sources = [];
   const bracket = { atp: [], wta: [] };
+  let firstMatchAt = null; // ISO string — earliest scheduled match across both leagues
 
   for (const lg of ["atp", "wta"]) {
     let data;
@@ -112,13 +137,21 @@ export async function onRequest(context) {
     } catch { sources.push(`${lg}:fetch_error`); continue; }
     sources.push(`${lg}:ok`);
 
-    // optionally narrow to the requested tournament by event name
+    // Narrow to the requested tournament by event name. IMPORTANT: if a name
+    // filter was given but nothing matches, this must NOT fall back to the full
+    // unfiltered event list — that would silently mix in every other tournament
+    // happening at the same time (this was a real bug: Indian Wells' ESPN listing
+    // uses its sponsor name, "BNP Paribas Open," not "Indian Wells," so an
+    // exact-substring check found nothing and quietly showed everything).
     let root = data;
     if (nameFilter && Array.isArray(data.events)) {
-      const ev = data.events.filter((e) =>
-        norm(e.name || e.shortName || "").includes(nameFilter) ||
-        nameFilter.includes(norm(e.shortName || "")));
-      if (ev.length) root = { events: ev };
+      const terms = aliasesFor(nameFilter).map(norm);
+      const ev = data.events.filter((e) => {
+        const en = norm(e.name || e.shortName || "");
+        return terms.some((t) => en.includes(t) || t.includes(en));
+      });
+      root = { events: ev }; // empty on no match — fail safe, not fail open
+      sources.push(`${lg}:matched_events=${ev.length}`);
     }
 
     const matches = [];
@@ -148,10 +181,15 @@ export async function onRequest(context) {
       const rank = roundRank(label);
       if (!roundsMap[label]) roundsMap[label] = { label, rank, matches: [] };
       roundsMap[label].matches.push({ p1, p2, winner: completed ? winnerName : null, completed });
+
+      const d = matchDate(m);
+      if (d && (!firstMatchAt || new Date(d).getTime() < new Date(firstMatchAt).getTime())) {
+        firstMatchAt = d;
+      }
     }
 
     bracket[lg] = Object.values(roundsMap).sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
   }
 
-  return json({ players, seeds, matches: matchesSeen, sources, bracket });
+  return json({ players, seeds, matches: matchesSeen, sources, bracket, firstMatchAt });
 }

@@ -90,6 +90,7 @@ Every push to the connected branch now redeploys automatically.
 | Results / draw fetch | `functions/api/anthropic.js`         | `ANTHROPIC_API_KEY`   |
 | Draw-release emails  | `functions/api/send-email.js`        | `RESEND_API_KEY`, `FROM_EMAIL`, `SEND_PASSWORD` |
 | Automatic winners email | `functions/api/winners-check.js` + `cron-worker/` | `CRON_SECRET` (+ the three above) |
+| Pick-lock deadline + countdown | `functions/api/deadline.js` | `SEND_PASSWORD` (reused, no new secret) |
 
 The front end calls `/api/kv` and `/api/anthropic` — same-origin, so no CORS and the key never
 reaches the browser.
@@ -197,6 +198,60 @@ read from several guessed field names since ESPN doesn't document this — if no
 gets bucketed under "Unknown round" rather than dropped, so a labeling miss is visible instead of
 silently losing data. Same "unverified feed" caveat as the rest of the scraper applies here, only
 more so, since this now depends on more of ESPN's undocumented shape than the simple win-tally did.
+
+## Pick-lock deadline + countdown
+
+A real, structured deadline per event — separate from the free-text "Deadline" wording in the draw
+email, which is just for phrasing (e.g. "10:59 AM PST tomorrow"). This one's an actual date/time,
+drives a live countdown on the Make Picks tab, and locks picks the moment it passes — not just
+whenever the tournament happens to start.
+
+**It's kept in sync automatically.** `functions/api/winners-check.js` — the same cron job that
+checks for tournament winners every few hours — now also pulls the tournament's actual earliest
+scheduled match time from ESPN (`firstMatchAt`, added to `functions/api/results.js`) and writes it
+in as the deadline. You don't need to set anything by hand in the normal case; it fills in on its
+own once the site can see the schedule, typically as soon as the draw's out.
+
+**Manual override still exists, and matters more than it might look like.** Join & Notify →
+organizer panel → pick a date/time → **Pin manually**. A manual entry is never overwritten by
+auto-sync until you hit **Clear**. This isn't just a nice-to-have:
+
+> ⚠️ **Real uncertainty worth knowing about:** this assumes ESPN's scoreboard feed actually lists a
+> tournament's matches *before* it starts. That's genuinely untested — ESPN's tennis endpoint is
+> unofficial and undocumented, and it's entirely possible it only returns "today's" matches, in
+> which case `firstMatchAt` wouldn't become available until the tournament's first day has already
+> arrived — which defeats the purpose of a deadline that's supposed to lock picks *before* play
+> begins. The sync now requests an explicit ~6-week window centered on today (rather than relying
+> on ESPN's undocumented default) specifically to improve the odds of this working, but it's still
+> worth checking once, right after a new draw is loaded: open Join & Notify and see whether a
+> deadline appears within a few hours. If it never does, use **Pin manually** — it's the reliable
+> fallback this whole feature was built to have.
+
+**Storage format:** `deadline:<event>` in `POOL_KV` is now `{ value: ISOString, source: "auto" |
+"manual", updatedAt }` — both `functions/api/deadline.js` and the pick-lock check in
+`functions/api/kv.js` read this format (with a legacy plain-string fallback in case anything was
+saved under the old format before this change).
+
+**New/changed endpoints:**
+- `functions/api/deadline.js` — `GET ?ek=<event>` is public (the countdown needs to read it
+  without a password); `POST`/`DELETE` require the `x-admin-password` header, same pattern as
+  `subscribers.js`. `POST` always sets `source: "manual"`.
+- `functions/api/results.js` — now also returns `firstMatchAt`, the earliest scheduled match time
+  found across both ATP and WTA for the filtered tournament.
+- `functions/api/winners-check.js` — syncs the deadline every cron cycle, before checking for
+  winners, so it applies before a tournament finishes (not just after).
+
+**Two independent lock triggers, either one locks:** the existing "tournament has started" signal
+(at least one live result recorded), OR this deadline having passed. If no deadline is ever set or
+synced for an event, only the first trigger applies — nothing changes from before this feature
+existed. Enforced both client-side (Make Picks tab disables itself) and server-side
+(`functions/api/kv.js` rejects pick writes past either trigger).
+
+**Also re-fixed in this pass:** `functions/api/results.js`'s `NAME_ALIASES` / fail-safe name
+matching (the "Indian Wells shows wrong players" fix from earlier) — check your deployed site
+still has this; it appears to have been dropped from the repo at some point after it was first
+sent over. If Indian Wells or another event's bracket/results look wrong, this is almost certainly
+why — see the note in `functions/api/results.js` itself.
 
 ## Picks stay anonymous — and locked — once the tournament starts
 

@@ -38,15 +38,21 @@ export async function onRequest(context) {
       if (!key) return json({ error: "missing key" }, 400);
 
       // Belt-and-suspenders: the UI disables pick editing once the tournament has
-      // started, but that's client-side only. Reject the write here too, so
-      // someone calling this API directly can't bypass the lock. "Started" uses
-      // the same signal as the UI — at least one live result recorded for this
-      // event (picks:<event>:<name> -> results:<event> non-empty). Note this only
-      // sees live KV results, not the historical RESULTS_SEED baked into the
-      // frontend bundle, which only matters for old/already-finished events.
+      // started OR the announced deadline has passed, but that's client-side
+      // only. Reject the write here too, so someone calling this API directly
+      // can't bypass the lock. Two independent triggers, either one locks:
+      //   1. "Started" — at least one live result recorded for this event.
+      //      Note this only sees live KV results, not the historical
+      //      RESULTS_SEED baked into the frontend bundle, which only matters
+      //      for old/already-finished events.
+      //   2. "Deadline passed" — an explicit deadline was set via the Join &
+      //      Notify tab (functions/api/deadline.js) and that time has passed.
+      //      Optional: if no deadline was ever set for this event, this check
+      //      simply doesn't apply and trigger #1 is the only one that matters.
       const picksMatch = key.match(/^picks:([^:]+):/);
       if (picksMatch) {
         const ek = picksMatch[1];
+
         const resultsRaw = await kv.get(`results:${ek}`);
         if (resultsRaw) {
           try {
@@ -55,6 +61,23 @@ export async function onRequest(context) {
               return json({ error: "Picks are locked — this tournament has started." }, 403);
             }
           } catch { /* malformed stored value — fail open, don't block on a parse error */ }
+        }
+
+        const deadlineRaw = await kv.get(`deadline:${ek}`);
+        if (deadlineRaw) {
+          // deadline.js stores { value, source, updatedAt } as of this version;
+          // fall back to treating the raw value as a plain ISO string in case
+          // anything was written before that format existed.
+          let deadlineMs = NaN;
+          try {
+            const parsed = JSON.parse(deadlineRaw);
+            deadlineMs = new Date(parsed?.value).getTime();
+          } catch {
+            deadlineMs = new Date(deadlineRaw).getTime();
+          }
+          if (!Number.isNaN(deadlineMs) && Date.now() >= deadlineMs) {
+            return json({ error: "Picks are locked — the deadline has passed." }, 403);
+          }
         }
       }
 

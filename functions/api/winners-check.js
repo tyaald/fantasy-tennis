@@ -189,9 +189,20 @@ export async function onRequestPost(context) {
     // Already sent for this event — skip.
     if (await kv.get(`winners-sent:${ek}`)) continue;
 
+    // Request an explicit ~6-week window centered on today (not forward-only —
+    // a tournament already in progress needs its earlier days included too, or
+    // completed-match win-tallying breaks) rather than relying on ESPN's
+    // undocumented default, which may only cover "today" and miss the schedule
+    // entirely before a tournament starts — exactly when firstMatchAt matters most.
+    const today = new Date();
+    const fmt = (d) => d.toISOString().slice(0, 10).replace(/-/g, "");
+    const windowStart = new Date(today.getTime() - 21 * 86400000);
+    const windowEnd = new Date(today.getTime() + 21 * 86400000);
+    const dates = `${fmt(windowStart)}-${fmt(windowEnd)}`;
+
     let data;
     try {
-      const r = await fetch(`${origin}/api/results?name=${encodeURIComponent(t.name)}`);
+      const r = await fetch(`${origin}/api/results?name=${encodeURIComponent(t.name)}&dates=${dates}`);
       data = await r.json();
     } catch {
       outcome.push({ ek, error: "results fetch failed" });
@@ -199,11 +210,28 @@ export async function onRequestPost(context) {
     }
     const players = data?.players || {};
 
+    // Keep the pick-lock deadline synced to the tournament's actual first
+    // scheduled match — runs every cycle, independent of whether the
+    // tournament has finished, since this is most useful *before* it starts.
+    // Never overwrites a manually-pinned deadline (source: "manual").
+    if (data?.firstMatchAt) {
+      const deadlineRaw = await kv.get(`deadline:${ek}`);
+      let current = null;
+      try { current = deadlineRaw ? JSON.parse(deadlineRaw) : null; } catch { current = null; }
+      const isManual = current?.source === "manual";
+      const alreadySynced = current?.source === "auto" && current?.value === data.firstMatchAt;
+      if (!isManual && !alreadySynced) {
+        await kv.put(`deadline:${ek}`, JSON.stringify({
+          value: data.firstMatchAt, source: "auto", updatedAt: Date.now(),
+        }));
+      }
+    }
+
     const menWinner = champFor(roster.men, players);
     const womenWinner = champFor(roster.women, players);
 
     if (!menWinner || !womenWinner) {
-      outcome.push({ ek, done: false });
+      outcome.push({ ek, done: false, deadlineSyncedTo: data?.firstMatchAt || null });
       continue;
     }
 

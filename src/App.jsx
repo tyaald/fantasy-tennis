@@ -352,6 +352,7 @@ export default function TennisPool() {
   const [drawLoading, setDrawLoading] = useState(false);
   const [drawError, setDrawError] = useState("");
   const [drawMsg, setDrawMsg] = useState("");
+  const [deadline, setDeadline] = useState(null); // ISO string or null — real pick-lock deadline
   const didFetchDraw = useRef({}); // {ek: true} — one draw fetch per event per session
   const didAutoFetch = useRef({}); // {ek: true} — one auto-fetch per event per session
 
@@ -377,6 +378,11 @@ export default function TennisPool() {
     setAutoRefresh(ar !== "0"); // on by default; only off if the user turned it off
     const rj = await store.get(`roster:${ek}`);
     setEventRoster(rj ? safeParse(rj, null) : null);
+    try {
+      const dr = await fetch(`/api/deadline?ek=${encodeURIComponent(ek)}`);
+      const dd = dr.ok ? await dr.json() : null;
+      setDeadline(dd?.deadline || null);
+    } catch { setDeadline(null); }
     setLoading(false);
   }, [ek]);
 
@@ -400,7 +406,7 @@ export default function TennisPool() {
   const filledCount = [...Object.values(men), ...Object.values(women)].filter(Boolean).length;
 
   const savePicks = async () => {
-    if (started) { setSaveMsg("Picks are locked — the tournament has started."); return; }
+    if (locked) { setSaveMsg(deadlinePassed && !started ? "Picks are locked — the deadline has passed." : "Picks are locked — the tournament has started."); return; }
     if (!name.trim()) { setSaveMsg("Add your name first."); return; }
     const rec = { name: name.trim(), men, women, updatedAt: Date.now() };
     const ok = await store.set(pickKey(ek, name), JSON.stringify(rec));
@@ -659,8 +665,15 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
   const rankedFor = (view) => (view === "men" ? menRanked : view === "women" ? womenRanked : standings);
 
   // "Officially started" = at least one match result exists for this event yet.
-  // Used to keep everyone's picks anonymous on the Standings tab until then.
+  // Used to keep everyone's picks anonymous on the Standings tab until then —
+  // anonymity is specifically about results starting to flow in, not the deadline.
   const started = Object.keys(results).length > 0;
+
+  // Picks are LOCKED (no further edits) the moment either of these is true:
+  // the tournament has started, OR an explicit deadline was set and has passed.
+  // A deadline (if set) fires first — that's the whole point of announcing one.
+  const deadlinePassed = deadline ? Date.now() >= new Date(deadline).getTime() : false;
+  const locked = started || deadlinePassed;
 
   // The pool champion for a bracket is whoever the tiebreak-aware ranking puts first —
   // same order shown on the Standings tab, so the "champion" banner and Record Books
@@ -773,12 +786,15 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
         {/* ============ MAKE PICKS ============ */}
         {tab === "picks" && (
           <section>
-            {started && (
+            {locked && (
               <p className="muted" style={{ padding: "0 2px 10px" }}>
-                🔒 Picks are locked — {tour.name} {year} has started, so selections can no longer be
-                changed. You can still see your own picks below.
+                🔒 Picks are locked — {deadlinePassed && !started
+                  ? "the entry deadline has passed"
+                  : `${tour.name} ${year} has started`}, so selections can no longer be changed.
+                You can still see your own picks below.
               </p>
             )}
+            {!locked && deadline && <Countdown deadline={deadline} tourName={tour.name} year={year} />}
 
             <div className="namebar">
               <input className="name-input" placeholder="Your name (or team handle)" value={name} onChange={(e) => setName(e.target.value)} />
@@ -821,7 +837,7 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
                           outsideTop={c.outsideTop}
                           accent={accent}
                           placeholder="Select player"
-                          disabled={started}
+                          disabled={locked}
                         />
                       </div>
                     ))}
@@ -831,8 +847,8 @@ Respond with ONLY a JSON array of strings, one per player. Prefix a seeded playe
             </div>
 
             <div className="save-bar">
-              <button className="primary" onClick={savePicks} disabled={started}>
-                {started ? "Locked" : "Lock in picks"}
+              <button className="primary" onClick={savePicks} disabled={locked}>
+                {locked ? "Locked" : "Lock in picks"}
               </button>
               {saveMsg && <span className="save-msg">{saveMsg}</span>}
             </div>
@@ -1153,6 +1169,40 @@ function Sheet({ rows, view, results, capsApply, hideNames }) {
 /*  BRACKET  (columns-per-round view, built from the ESPN scraper)     */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/*  COUNTDOWN  (live ticking display of the real pick-lock deadline)   */
+/* ------------------------------------------------------------------ */
+
+function Countdown({ deadline, tourName, year }) {
+  const target = new Date(deadline).getTime();
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const remaining = Math.max(0, target - now);
+  const totalSec = Math.floor(remaining / 1000);
+  const d = Math.floor(totalSec / 86400);
+  const h = Math.floor((totalSec % 86400) / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+
+  return (
+    <div className="countdown">
+      <span className="countdown-label">
+        🔒 Picks for {tourName} {year} lock in
+      </span>
+      <span className="countdown-clock">
+        {d > 0 && <><b>{d}</b>d </>}
+        <b>{pad(h)}</b>h <b>{pad(m)}</b>m <b>{pad(s)}</b>s
+      </span>
+    </div>
+  );
+}
+
 function BracketTab({ tourName, year, accent }) {
   const [side, setSide] = useState("men"); // men | women
   const [bracket, setBracket] = useState(null); // { atp: [...], wta: [...] }
@@ -1344,7 +1394,8 @@ function RulesTab({ capsApply }) {
             can edit picks after that point.</li>
           <li>"Top 10 / 20 / 30" refers to the tournament's own seeding, not ATP/WTA world ranking.</li>
           <li>Feel free to share the pool with others — more entries, bigger pot.</li>
-          <li>Enter picks by each event's deadline — see the announcement email or the organizer for the exact cutoff.</li>
+          <li>Enter picks by each event's deadline — a live countdown shows on the Make Picks tab
+            once the organizer sets one; picks lock automatically the moment it passes.</li>
         </ul>
       </div>
     </section>
@@ -1397,7 +1448,7 @@ function InviteTab({ tid, tourName, year, accent }) {
   // admin composer
   const [password, setPassword] = useState("");
   const [tournament, setTournament] = useState(`${tourName} ${year}`);
-  const [deadline, setDeadline] = useState("10:59 AM PST tomorrow");
+  const [deadlineText, setDeadlineText] = useState("10:59 AM PST tomorrow"); // wording used in the email
   const [mensUrl, setMensUrl] = useState(DRAW_LINKS[tid]?.men || "");
   const [womensUrl, setWomensUrl] = useState(DRAW_LINKS[tid]?.women || "");
   const [siteUrl, setSiteUrl] = useState(typeof window !== "undefined" ? window.location.origin : "");
@@ -1406,6 +1457,74 @@ function InviteTab({ tid, tourName, year, accent }) {
   const [sender, setSender] = useState("Ty");
   const [sendMsg, setSendMsg] = useState("");
   const [sending, setSending] = useState(false);
+
+  // real, structured pick-lock deadline (separate from the free-text wording above) —
+  // this is what actually drives the countdown and the pick lock, not deadlineText.
+  // It's kept in sync automatically with the tournament's real first-match time by
+  // functions/api/winners-check.js (source: "auto"); saving one here manually pins
+  // it (source: "manual") so auto-sync won't override your call.
+  const ek = eventKey(tid, year);
+  const [deadlineAt, setDeadlineAt] = useState(""); // datetime-local string, e.g. "2026-03-05T10:59"
+  const [savedDeadline, setSavedDeadline] = useState(null); // ISO string currently saved on the server
+  const [deadlineSource, setDeadlineSource] = useState(null); // "auto" | "manual" | null
+  const [deadlineMsg, setDeadlineMsg] = useState("");
+  const [deadlineBusy, setDeadlineBusy] = useState(false);
+
+  const loadDeadline = async () => {
+    try {
+      const r = await fetch(`/api/deadline?ek=${encodeURIComponent(ek)}`);
+      const d = r.ok ? await r.json() : null;
+      setSavedDeadline(d?.deadline || null);
+      setDeadlineSource(d?.source || null);
+      if (d?.deadline) {
+        // toISOString → trim to the datetime-local input's expected format
+        setDeadlineAt(new Date(d.deadline).toISOString().slice(0, 16));
+      } else {
+        setDeadlineAt("");
+      }
+    } catch { /* leave blank on failure */ }
+  };
+  useEffect(() => { loadDeadline(); }, [ek]); // eslint-disable-line
+
+  const saveDeadline = async () => {
+    if (!password) { setDeadlineMsg("Enter the send password first."); return; }
+    if (!deadlineAt) { setDeadlineMsg("Pick a date and time first."); return; }
+    setDeadlineBusy(true); setDeadlineMsg("Saving…");
+    try {
+      const res = await fetch("/api/deadline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-password": password },
+        body: JSON.stringify({ ek, deadline: deadlineAt }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't save.");
+      setSavedDeadline(data.deadline);
+      setDeadlineSource("manual");
+      setDeadlineMsg(`Pinned manually — picks lock ${new Date(data.deadline).toLocaleString()}. Auto-sync won't override this until you clear it.`);
+    } catch (err) {
+      setDeadlineMsg(err.message);
+    } finally {
+      setDeadlineBusy(false);
+    }
+  };
+
+  const clearDeadline = async () => {
+    if (!password) { setDeadlineMsg("Enter the send password first."); return; }
+    setDeadlineBusy(true); setDeadlineMsg("Clearing…");
+    try {
+      const res = await fetch(`/api/deadline?ek=${encodeURIComponent(ek)}`, {
+        method: "DELETE",
+        headers: { "x-admin-password": password },
+      });
+      if (!res.ok) throw new Error("Couldn't clear.");
+      setSavedDeadline(null); setDeadlineAt(""); setDeadlineSource(null);
+      setDeadlineMsg("Cleared — auto-sync will set this from the tournament's first match once known (or picks lock at tournament start if not).");
+    } catch (err) {
+      setDeadlineMsg(err.message);
+    } finally {
+      setDeadlineBusy(false);
+    }
+  };
 
   const autofillLinks = () => {
     const links = DRAW_LINKS[tid];
@@ -1439,7 +1558,7 @@ function InviteTab({ tid, tourName, year, accent }) {
     }
   };
 
-  const emailHtml = buildDrawEmailHtml({ tournament, deadline, mensUrl, womensUrl, siteUrl, buyin, ruleNote, sender });
+  const emailHtml = buildDrawEmailHtml({ tournament, deadline: deadlineText, mensUrl, womensUrl, siteUrl, buyin, ruleNote, sender });
 
   const sendEmail = async () => {
     if (!password) { setSendMsg("Enter the send password first."); return; }
@@ -1521,7 +1640,40 @@ function InviteTab({ tid, tourName, year, accent }) {
             <input className="name-input" type="password" placeholder="Send password" value={password} onChange={(e) => setPassword(e.target.value)} />
 
             <input className="name-input" placeholder="Tournament" value={tournament} onChange={(e) => setTournament(e.target.value)} />
-            <input className="name-input" placeholder="Deadline (e.g. 10:59 AM PST tomorrow)" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+            <input className="name-input" placeholder="Deadline wording for the email (e.g. 10:59 AM PST tomorrow)" value={deadlineText} onChange={(e) => setDeadlineText(e.target.value)} />
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="muted small">Actual pick-lock deadline (drives the countdown + lock)</span>
+            </div>
+            <input
+              className="name-input" type="datetime-local"
+              value={deadlineAt} onChange={(e) => setDeadlineAt(e.target.value)}
+            />
+            <div className="save-bar">
+              <button type="button" className="ghost" onClick={saveDeadline} disabled={deadlineBusy}>
+                {deadlineBusy ? "Saving…" : "Pin manually"}
+              </button>
+              {savedDeadline && (
+                <button type="button" className="ghost" onClick={clearDeadline} disabled={deadlineBusy}>
+                  Clear (revert to auto)
+                </button>
+              )}
+              <button type="button" className="ghost" onClick={loadDeadline} disabled={deadlineBusy}>↺ Refresh</button>
+              {deadlineMsg && <span className="save-msg">{deadlineMsg}</span>}
+            </div>
+            {savedDeadline ? (
+              <div className="muted small" style={{ marginTop: -4, marginBottom: 4 }}>
+                Picks lock {new Date(savedDeadline).toLocaleString()} — {deadlineSource === "manual"
+                  ? "manually pinned, won't be auto-updated."
+                  : "auto-synced to the tournament's first match, refreshed every few hours."}
+              </div>
+            ) : (
+              <div className="muted small" style={{ marginTop: -4, marginBottom: 4 }}>
+                No deadline yet — this fills in automatically once the site detects the
+                tournament's first scheduled match (checked every few hours). Set one manually
+                above if you don't want to wait for that.
+              </div>
+            )}
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span className="muted small">Draw links</span>
@@ -1883,4 +2035,12 @@ const CSS = `
 .bp-name{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .bracket-live-tag{font-family:'Barlow Condensed',sans-serif; text-transform:uppercase; letter-spacing:.06em;
   font-size:10.5px; color:var(--accent); text-align:center; padding:4px 0; background:var(--panel2)}
+
+/* countdown */
+.countdown{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--accent);
+  border-radius:10px; padding:10px 16px; margin-bottom:14px}
+.countdown-label{font-size:13.5px; color:var(--text)}
+.countdown-clock{font-family:'Barlow Condensed',sans-serif; letter-spacing:.03em; font-size:16px; color:var(--accent)}
+.countdown-clock b{font-weight:800}
 `;
