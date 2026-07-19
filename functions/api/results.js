@@ -160,6 +160,14 @@ export async function onRequest(context) {
     const roundsMap = {}; // label -> { label, rank, matches: [] }
 
     for (const m of matches) {
+      // Qualifying is a separate pre-tournament event ESPN bundles under the same
+      // scoreboard — it's not part of the main draw picks/scoring/bracket cares
+      // about (its "Qualifying Final" also collides with the real main-draw
+      // Final under roundRank's \bfinal\b match, so it needs excluding before
+      // that logic runs too, not just visually filtering it out later).
+      const label = roundLabel(m);
+      if (/qualif/i.test(label)) continue;
+
       const [p1, p2] = m.competitors.map(singleAthlete);
       if (!p1 || !p2) continue; // doubles or unparseable — skip for both tally and bracket
 
@@ -177,7 +185,6 @@ export async function onRequest(context) {
         (players[key] || (players[key] = { name: winnerName, wins: 0 })).wins++;
       }
 
-      const label = roundLabel(m);
       const rank = roundRank(label);
       if (!roundsMap[label]) roundsMap[label] = { label, rank, matches: [] };
       roundsMap[label].matches.push({ p1, p2, winner: completed ? winnerName : null, completed });
