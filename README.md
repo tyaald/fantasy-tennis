@@ -296,9 +296,13 @@ everything else in this file.
 tournament's draw as out (a scheduled first match exists — `firstMatchAt` from
 `functions/api/results.js`). The moment that's true for an event nobody's been told about yet, it:
 
-1. Builds the player roster using the exact same AI + web-search call "Load field from draw"
-   already uses (`functions/api/anthropic.js`) — just triggered server-side instead of by someone
-   opening the Make Picks tab.
+1. Builds the player roster — **primarily by scraping**, not AI: Round 1 of the ESPN bracket data
+   already fetched for results/deadline *is* the field, seeds included, from the same free feed,
+   no extra call needed (`rosterFromBracket`, duplicated between `src/App.jsx` and
+   `functions/api/winners-check.js` — keep both in sync). Falls back to the AI + web-search method
+   "Load field from draw" always used before, only if the ESPN scrape comes up empty (draw not in
+   ESPN's system yet, or a naming mismatch like the Indian Wells one). "Load field from draw" on
+   the Make Picks tab works the same way now — scrape first, AI as a safety net, not the default.
 2. Composes the draw-release email — tournament name and draw links are computable
    (`DRAW_LINKS`, duplicated from `src/App.jsx` — **keep both copies in sync manually**, there's no
    shared import between the two runtimes), the deadline is the tournament's real first-match time
@@ -312,9 +316,11 @@ human send has happened once. Until then, an auto-sent email falls back to gener
 wording for the buy-in line and omits the rule note entirely — not wrong, just not yours.
 
 **Two independent, compounding sources of risk, both now unreviewed:**
-- The AI-built roster could have a wrong name, a wrong seed, or an incomplete field — previously
-  you'd likely notice this on the Make Picks tab before anyone relied on it; now it goes straight
-  into an email.
+- The roster (scraped or AI-built) could have a wrong name, a wrong seed, or an incomplete field —
+  previously you'd likely notice this on the Make Picks tab before anyone relied on it; now it goes
+  straight into an email. The scrape path is generally more trustworthy than the AI path (it's
+  reading ESPN's structured data directly rather than an AI's interpretation of a web search), but
+  it's still the same unverified feed as everything else here.
 - The ESPN "draw is out" detection is the same unofficial, undocumented feed flagged everywhere
   else in this file. A false read (or a naming mismatch like the Indian Wells one from earlier)
   means either an email fires on stale/wrong data, or doesn't fire at all and nobody notices until

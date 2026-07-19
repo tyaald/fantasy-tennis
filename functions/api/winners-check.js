@@ -3,13 +3,15 @@
 // Protected by CRON_SECRET. Each cycle, for every tournament the pool tracks:
 //
 //  1. AUTO-ANNOUNCE: if ESPN shows the draw is out (a scheduled first match
-//     exists) and nobody's been told yet, build the roster via the same
-//     AI+web-search call "Load field from draw" uses, then compose and send
-//     the draw-release email with ZERO human review — draw links come from
-//     DRAW_LINKS below, the deadline is the tournament's real first-match
-//     time, and the buy-in/rule-note/sign-off wording reuses whatever you
-//     used in your last manual send (functions/api/send-email.js persists
-//     that as "email-defaults" on every successful manual send).
+//     exists) and nobody's been told yet, build the roster — Round 1 of the
+//     ESPN bracket data already fetched IS the field, no extra call needed —
+//     falling back to the AI + web-search method "Load field from draw" uses
+//     only if that comes up empty, then compose and send the draw-release
+//     email with ZERO human review — draw links come from DRAW_LINKS below,
+//     the deadline is the tournament's real first-match time, and the
+//     buy-in/rule-note/sign-off wording reuses whatever you used in your last
+//     manual send (functions/api/send-email.js persists that as
+//     "email-defaults" on every successful manual send).
 //  2. DEADLINE SYNC: keeps the pick-lock deadline matched to the real first
 //     match time, once announced (see #1). Never overwrites a manual pin.
 //  3. WINNERS: the moment both a men's and women's tennis champion are found
@@ -201,6 +203,26 @@ async function sendResendEmail(env, { subject, html, emails }) {
 // Same prompt/parsing as fetchDraw's `ask()` in src/App.jsx, called server-to-
 // server instead of from the browser. Needs ANTHROPIC_API_KEY set (same secret
 // "Load field from draw" already relies on).
+// Pulls the field straight out of the ESPN bracket data already fetched for
+// results/deadline — Round 1 of the bracket IS the field, with seeds attached,
+// no AI call needed. MUST match rosterFromBracket in src/App.jsx. Only works
+// once ESPN has ingested the draw (same timing this whole auto-announce step
+// already depends on via firstMatchAt).
+function rosterFromBracket(sideRounds) {
+  if (!sideRounds || !sideRounds.length) return { names: [], seeds: {} };
+  const first = sideRounds[0]; // rounds already sorted earliest-first by results.js
+  const names = []; const seeds = {};
+  for (const m of first.matches || []) {
+    for (const p of [m.p1, m.p2]) {
+      if (!p?.name) continue;
+      if (!names.includes(p.name)) names.push(p.name);
+      if (p.seed != null) seeds[p.name] = p.seed;
+    }
+  }
+  names.sort((a, b) => a.localeCompare(b));
+  return { names, seeds };
+}
+
 async function buildRosterViaAI(origin, tourName, year) {
   const ask = async (label) => {
     const prompt =
@@ -313,14 +335,29 @@ export async function onRequestPost(context) {
       if (rosterRaw) { try { roster = JSON.parse(rosterRaw); } catch { roster = null; } }
 
       if (!roster || !roster.men?.length || !roster.women?.length) {
-        try {
-          roster = await buildRosterViaAI(origin, t.name, year);
-          if (roster.men?.length && roster.women?.length) {
-            await kv.put(`roster:${ek}`, JSON.stringify(roster));
+        roster = { men: [], women: [], menSeeds: {}, womenSeeds: {} };
+        const m = rosterFromBracket(data?.bracket?.atp);
+        const w = rosterFromBracket(data?.bracket?.wta);
+        let via = "scrape";
+
+        if (m.names.length && w.names.length) {
+          roster = { men: m.names, women: w.names, menSeeds: m.seeds, womenSeeds: w.seeds };
+        } else {
+          // ESPN bracket data came up empty (draw not in its system yet, or a
+          // naming mismatch like the earlier Indian Wells bug) — fall back to
+          // the AI + web-search method so this still works.
+          try {
+            via = "AI fallback";
+            roster = await buildRosterViaAI(origin, t.name, year);
+          } catch (err) {
+            outcome.push({ ek, autoAnnounce: false, error: `roster build failed: ${err.message}` });
+            roster = null;
           }
-        } catch (err) {
-          outcome.push({ ek, autoAnnounce: false, error: `roster build failed: ${err.message}` });
-          roster = null;
+        }
+
+        if (roster?.men?.length && roster?.women?.length) {
+          await kv.put(`roster:${ek}`, JSON.stringify(roster));
+          outcome.push({ ek, rosterBuiltVia: via });
         }
       }
 

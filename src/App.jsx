@@ -544,53 +544,91 @@ Respond with ONLY a JSON object — no prose, no markdown fences. Keys must be E
   };
 
   // Pull the full singles field/draw for this event so picks can be made from real entrants.
-  const fetchDraw = async (auto = false) => {
-    setDrawError(""); setDrawMsg(""); setDrawLoading(true);
-    const ask = async (label) => {
-      const prompt =
+  // Pulls the field straight out of the ESPN bracket data (functions/api/results.js)
+  // already used for results/deadline — Round 1 of the bracket IS the field, with
+  // seeds attached, no AI/web-search needed. Only works once ESPN has ingested the
+  // draw (same timing as everything else that depends on this feed).
+  const rosterFromBracket = (sideRounds) => {
+    if (!sideRounds || !sideRounds.length) return { names: [], seeds: {} };
+    const first = sideRounds[0]; // rounds already sorted earliest-first by the API
+    const names = []; const seeds = {};
+    for (const m of first.matches || []) {
+      for (const p of [m.p1, m.p2]) {
+        if (!p?.name) continue;
+        if (!names.includes(p.name)) names.push(p.name);
+        if (p.seed != null) seeds[p.name] = p.seed;
+      }
+    }
+    names.sort((a, b) => a.localeCompare(b));
+    return { names, seeds };
+  };
+
+  // AI + web-search fallback — only used if the ESPN scrape above comes up empty
+  // (e.g. the draw isn't in ESPN's system yet, or a name-matching mismatch like the
+  // Indian Wells one). Keeps "Load field from draw" working even if the primary,
+  // faster, free path can't find anything.
+  const askAI = async (label) => {
+    const prompt =
 `List every player in the ${label} singles MAIN DRAW of the ${tour.name} ${year} tennis tournament. If the official draw is not out yet, use the confirmed entry list (the field).
 
 For seeded players, use the SEED NUMBER the tournament assigned in THIS event's draw (usually 1–32) — NOT the player's ATP/WTA world ranking. These often differ when higher-ranked players are absent; always use the draw's seeding.
 
 Respond with ONLY a JSON array of strings, one per player. Prefix a seeded player's name with their seed number and a pipe, e.g. "5|Rune". Unseeded players are just the name, e.g. "Brooksby". Use surname only, or "F. Surname" to disambiguate. No prose, no markdown. Example: ["1|Alcaraz","2|Sinner","Brooksby","Mpetshi Perricard"]`;
-      const res = await fetch("/api/anthropic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
-      if (!res.ok) throw new Error(`Request failed (${res.status})`);
-      const data = await res.json();
-      if (data?.type === "error") throw new Error(data.error?.message || "API error");
-      const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-      const a = text.indexOf("["), b = text.lastIndexOf("]");
-      if (a === -1 || b === -1) return { names: [], seeds: {} };
-      let arr; try { arr = JSON.parse(text.slice(a, b + 1)); } catch { return { names: [], seeds: {} }; }
-      if (!Array.isArray(arr)) return { names: [], seeds: {} };
-      const names = []; const seeds = {};
-      arr.forEach((entry) => {
-        if (typeof entry !== "string") return;
-        const m = /^\s*(\d{1,2})\s*\|\s*(.+)$/.exec(entry);
-        const nm = (m ? m[2] : entry).trim();
-        if (!nm) return;
-        if (!names.includes(nm)) names.push(nm);
-        if (m) seeds[nm] = Number(m[1]);
-      });
-      names.sort((x, y) => x.localeCompare(y));
-      return { names, seeds };
-    };
+    const res = await fetch("/api/anthropic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        messages: [{ role: "user", content: prompt }],
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    const data = await res.json();
+    if (data?.type === "error") throw new Error(data.error?.message || "API error");
+    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    const a = text.indexOf("["), b = text.lastIndexOf("]");
+    if (a === -1 || b === -1) return { names: [], seeds: {} };
+    let arr; try { arr = JSON.parse(text.slice(a, b + 1)); } catch { return { names: [], seeds: {} }; }
+    if (!Array.isArray(arr)) return { names: [], seeds: {} };
+    const names = []; const seeds = {};
+    arr.forEach((entry) => {
+      if (typeof entry !== "string") return;
+      const m = /^\s*(\d{1,2})\s*\|\s*(.+)$/.exec(entry);
+      const nm = (m ? m[2] : entry).trim();
+      if (!nm) return;
+      if (!names.includes(nm)) names.push(nm);
+      if (m) seeds[nm] = Number(m[1]);
+    });
+    names.sort((x, y) => x.localeCompare(y));
+    return { names, seeds };
+  };
+
+  const fetchDraw = async (auto = false) => {
+    setDrawError(""); setDrawMsg(""); setDrawLoading(true);
     try {
-      const [m, w] = await Promise.all([ask("men's (ATP)"), ask("women's (WTA)")]);
+      let m = { names: [], seeds: {} }, w = { names: [], seeds: {} };
+      let via = "scrape";
+
+      try {
+        const r = await fetch(`/api/results?name=${encodeURIComponent(tour.name)}`);
+        const data = r.ok ? await r.json() : null;
+        m = rosterFromBracket(data?.bracket?.atp);
+        w = rosterFromBracket(data?.bracket?.wta);
+      } catch { /* fall through to AI below */ }
+
+      if (!m.names.length && !w.names.length) {
+        via = "AI fallback";
+        [m, w] = await Promise.all([askAI("men's (ATP)"), askAI("women's (WTA)")]);
+      }
+
       if (!m.names.length && !w.names.length) throw new Error("No draw or entry list found yet for this event.");
       const roster = { men: m.names, women: w.names, menSeeds: m.seeds, womenSeeds: w.seeds };
       setEventRoster(roster);
       await store.set(`roster:${ek}`, JSON.stringify(roster));
       const seeded = Object.keys(m.seeds).length + Object.keys(w.seeds).length;
-      setDrawMsg(`Loaded ${m.names.length} men + ${w.names.length} women (${seeded} seeded).`);
+      setDrawMsg(`Loaded ${m.names.length} men + ${w.names.length} women (${seeded} seeded) via ${via}.`);
       setTimeout(() => setDrawMsg(""), 4000);
     } catch (err) {
       if (!auto) setDrawError(err.message || "Couldn't load the draw.");
