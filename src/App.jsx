@@ -1567,7 +1567,7 @@ function InviteTab({ tid, tourName, year, accent }) {
       const res = await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password, tournament, html: emailHtml }),
+        body: JSON.stringify({ password, tournament, html: emailHtml, ek }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Send failed.");
@@ -1669,9 +1669,10 @@ function InviteTab({ tid, tourName, year, accent }) {
               </div>
             ) : (
               <div className="muted small" style={{ marginTop: -4, marginBottom: 4 }}>
-                No deadline yet — this fills in automatically once the site detects the
-                tournament's first scheduled match (checked every few hours). Set one manually
-                above if you don't want to wait for that.
+                No deadline yet — auto-sync only starts once you've sent the draw email below
+                (so the countdown doesn't start before anyone's been told about it), then fills in
+                automatically from the tournament's first scheduled match, checked every few hours.
+                Set one manually above if you want it sooner or don't plan to send an email.
               </div>
             )}
 

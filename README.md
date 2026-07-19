@@ -206,11 +206,13 @@ email, which is just for phrasing (e.g. "10:59 AM PST tomorrow"). This one's an 
 drives a live countdown on the Make Picks tab, and locks picks the moment it passes — not just
 whenever the tournament happens to start.
 
-**It's kept in sync automatically.** `functions/api/winners-check.js` — the same cron job that
-checks for tournament winners every few hours — now also pulls the tournament's actual earliest
-scheduled match time from ESPN (`firstMatchAt`, added to `functions/api/results.js`) and writes it
-in as the deadline. You don't need to set anything by hand in the normal case; it fills in on its
-own once the site can see the schedule, typically as soon as the draw's out.
+**It's kept in sync automatically — but only after you've sent the draw email.**
+`functions/api/winners-check.js` — the same cron job that checks for tournament winners every few
+hours — pulls the tournament's actual earliest scheduled match time from ESPN (`firstMatchAt`,
+added to `functions/api/results.js`) and writes it in as the deadline. This only starts once
+`functions/api/send-email.js` has recorded that the draw email actually went out for that event
+(`email-sent:<event>` in `POOL_KV`) — the countdown shouldn't start ticking before anyone's been
+told a deadline exists at all. Until you send that email, no deadline gets set automatically.
 
 **Manual override still exists, and matters more than it might look like.** Join & Notify →
 organizer panel → pick a date/time → **Pin manually**. A manual entry is never overwritten by
@@ -238,8 +240,12 @@ saved under the old format before this change).
   `subscribers.js`. `POST` always sets `source: "manual"`.
 - `functions/api/results.js` — now also returns `firstMatchAt`, the earliest scheduled match time
   found across both ATP and WTA for the filtered tournament.
-- `functions/api/winners-check.js` — syncs the deadline every cron cycle, before checking for
-  winners, so it applies before a tournament finishes (not just after).
+- `functions/api/send-email.js` — now takes an `ek` field in the request body (sent automatically
+  by the Join & Notify tab) and, on a successful send, records `email-sent:<event>` in `POOL_KV`.
+  This is the gate that lets deadline auto-sync start.
+- `functions/api/winners-check.js` — syncs the deadline every cron cycle (only for events with
+  `email-sent:<event>` set), before checking for winners, so it applies before a tournament
+  finishes, not just after.
 
 **Two independent lock triggers, either one locks:** the existing "tournament has started" signal
 (at least one live result recorded), OR this deadline having passed. If no deadline is ever set or

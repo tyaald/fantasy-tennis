@@ -213,8 +213,12 @@ export async function onRequestPost(context) {
     // Keep the pick-lock deadline synced to the tournament's actual first
     // scheduled match — runs every cycle, independent of whether the
     // tournament has finished, since this is most useful *before* it starts.
+    // Only starts once the draw email has actually been sent for this event
+    // (functions/api/send-email.js sets email-sent:<event> on success) — the
+    // countdown shouldn't start ticking before anyone's been told about it.
     // Never overwrites a manually-pinned deadline (source: "manual").
-    if (data?.firstMatchAt) {
+    const announced = await kv.get(`email-sent:${ek}`);
+    if (announced && data?.firstMatchAt) {
       const deadlineRaw = await kv.get(`deadline:${ek}`);
       let current = null;
       try { current = deadlineRaw ? JSON.parse(deadlineRaw) : null; } catch { current = null; }
@@ -231,7 +235,11 @@ export async function onRequestPost(context) {
     const womenWinner = champFor(roster.women, players);
 
     if (!menWinner || !womenWinner) {
-      outcome.push({ ek, done: false, deadlineSyncedTo: data?.firstMatchAt || null });
+      outcome.push({
+        ek, done: false,
+        announced: Boolean(announced),
+        deadlineSyncedTo: announced ? (data?.firstMatchAt || null) : null,
+      });
       continue;
     }
 

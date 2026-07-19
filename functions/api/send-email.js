@@ -65,6 +65,15 @@ export async function onRequestPost(context) {
     return json({ error: `Resend error: ${detail}` }, 502);
   }
 
+  // Marks this event as "announced" — functions/api/winners-check.js only starts
+  // auto-syncing the pick-lock deadline for an event once this flag exists, so
+  // the countdown doesn't start ticking before the draw email has actually gone
+  // out. Harmless if body.ek is missing (older client, or a manual API call);
+  // deadline sync for that event just won't start until it's set some other way.
+  if (body.ek) {
+    await kv.put(`email-sent:${body.ek}`, JSON.stringify({ sentAt: Date.now() }));
+  }
+
   return json({ ok: true, count: emails.length });
 }
 
